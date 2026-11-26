@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DocStudio Pro — Aadhaar, Passport & A4 Print Suite</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<header class="app-header">
+  <div class="brand">
+    <div class="brand-logo" aria-hidden="true">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="16" rx="2"/>
+        <path d="M7 8h10M7 12h6M7 16h8"/>
+      </svg>
+    </div>
+    <div class="brand-text">
+      <h1>DocStudio Pro</h1>
+      <span class="brand-sub">Aadhaar, Passport &amp; A4 Suite</span>
+    </div>
+    <span class="creator-badge" title="Created by Ayush Xw'D ❤️">
+      <span class="creator-led-text">✨ Created by Ayush Xw'D ❤️</span>
+    </span>
+  </div>
+
+  <nav class="mode-tabs" role="tablist">
+    <button class="tab-btn active" data-tab="aadhaarTab" onclick="switchTab('aadhaarTab', this)">
+      <span>🪪</span> Aadhaar (A4)
+    </button>
+    <button class="tab-btn" data-tab="passportTab" onclick="switchTab('passportTab', this)">
+      <span>📸</span> Passport Photo
+    </button>
+    <button class="tab-btn" data-tab="multiTab" onclick="switchTab('multiTab', this)">
+      <span>📄</span> Multi-Page <span class="tab-count" id="pageCountBadge">0/50</span>
+    </button>
+    <button class="tab-btn" data-tab="resizeTab" onclick="switchTab('resizeTab', this)">
+      <span>📏</span> PDF / JPG Resize
+    </button>
+  </nav>
+</header>
+
+<main class="container">
+  <!-- TAB 1: AADHAAR CARD MODE -->
+  <section id="aadhaarTab" class="tab-view active">
+    <div class="workspace">
+      <aside class="panel">
+        <div class="section-header">
+          <span class="step-title"><span class="step-num">01</span> Upload Cards</span>
+          <label class="inline-check">
+            <input type="checkbox" id="autoSetCheck" checked /> Auto-Set A4
+          </label>
+        </div>
+
+        <div class="drop-zone" id="aadhaarDropZone">
+          <input type="file" id="aadhaarFileInput" accept="image/*" multiple hidden />
+          <div class="drop-icon">📤</div>
+          <div class="drop-title">Select, Drop or Paste Card</div>
+          <div class="drop-sub">Supports Front &amp; Back images</div>
+          <span class="status-pill" id="nextSlotBadge">Next Target: FRONT</span>
+        </div>
+
+        <div class="slots-grid">
+          <div class="slot-card targeted" id="frontSlotCard" onclick="setNextTarget('front')">
+            <div class="slot-header">
+              <span>FRONT</span>
+              <span id="frontStatus" class="slot-state">Empty</span>
+            </div>
+            <div class="slot-preview" id="frontPreviewBox">No Image</div>
+            <div class="slot-btns">
+              <button class="mini-btn" onclick="event.stopPropagation(); openRecropAadhaar('front')">Crop</button>
+              <button class="mini-btn" onclick="event.stopPropagation(); rotateAadhaar('front')">90°</button>
+              <button class="mini-btn danger" onclick="event.stopPropagation(); clearAadhaarSide('front')">✕</button>
+            </div>
+          </div>
+
+          <div class="slot-card" id="backSlotCard" onclick="setNextTarget('back')">
+            <div class="slot-header">
+              <span>BACK</span>
+              <span id="backStatus" class="slot-state">Empty</span>
+            </div>
+            <div class="slot-preview" id="backPreviewBox">No Image</div>
+            <div class="slot-btns">
+              <button class="mini-btn" onclick="event.stopPropagation(); openRecropAadhaar('back')">Crop</button>
+              <button class="mini-btn" onclick="event.stopPropagation(); rotateAadhaar('back')">90°</button>
+              <button class="mini-btn danger" onclick="event.stopPropagation(); clearAadhaarSide('back')">✕</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="quick-row">
+          <button class="mini-btn" onclick="swapAadhaarSides()">⇄ Swap Sides</button>
+          <button class="mini-btn danger" onclick="clearAllAadhaar()">Clear All</button>
+        </div>
+
+        <div class="control-group">
+          <span class="step-title"><span class="step-num">02</span> Enhancement Filter</span>
+          <div class="pill-group mt-8">
+            <button class="pill-btn active" data-filter="magic" onclick="setAadhaarFilter('magic', this)">CamScanner</button>
+            <button class="pill-btn" data-filter="bw" onclick="setAadhaarFilter('bw', this)">B&amp;W Xerox</button>
+            <button class="pill-btn" data-filter="bright" onclick="setAadhaarFilter('bright', this)">Bright</button>
+            <button class="pill-btn" data-filter="original" onclick="setAadhaarFilter('original', this)">Original</button>
+          </div>
+          <div class="slider-row">
+            <span>Sharpness</span>
+            <input type="range" id="contrastSlider" min="90" max="150" value="115" oninput="onContrastSlide()" />
+            <span id="contrastVal" class="val-tag">115%</span>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <span class="step-title"><span class="step-num">03</span> Layout &amp; Size</span>
+          <div class="pill-group three mt-8">
+            <button class="pill-btn" data-size="small" onclick="setSize('small', this)">Small</button>
+            <button class="pill-btn active" data-size="medium" onclick="setSize('medium', this)">Medium</button>
+            <button class="pill-btn" data-size="large" onclick="setSize('large', this)">Large</button>
+          </div>
+          <div class="slider-row">
+            <span>Top Margin</span>
+            <input type="range" id="topMarginSlider" min="10" max="70" value="20" oninput="scheduleA4Render()" />
+          </div>
+          <div class="slider-row">
+            <span>Card Gap</span>
+            <input type="range" id="gapSlider" min="5" max="50" value="14" oninput="scheduleA4Render()" />
+          </div>
+          <label class="checkbox-row">
+            <input type="checkbox" id="borderCheck" checked onchange="renderA4()" />
+            Show cut border around cards
+          </label>
+        </div>
+
+        <div class="action-bar">
+          <button class="btn-main btn-success span-2" onclick="printAadhaar()">🖨️ Print A4 Sheet</button>
+          <button class="btn-main btn-danger" onclick="downloadAadhaarPDF()">📄 Export PDF</button>
+          <button class="btn-main btn-primary" onclick="downloadAadhaarJPG()">🖼️ Export JPG</button>
+          <button class="btn-main btn-dark span-2" onclick="addAadhaarToMultiPage()">➕ Add Sheet to Multi-Page</button>
+        </div>
+      </aside>
+
+      <div class="panel studio-panel">
+        <div class="studio-toolbar">
+          <div>
+            <strong>A4 Sheet Preview</strong>
+            <span class="studio-meta">210 × 297 mm • Portrait</span>
+          </div>
+          <span class="studio-badge">Live Render</span>
+        </div>
+        <div class="a4-container">
+          <canvas id="a4PreviewCanvas" width="840" height="1188"></canvas>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB 2: PASSPORT PHOTO STUDIO -->
+  <section id="passportTab" class="tab-view">
+    <div class="info-strip">
+      <div class="info-strip-title">Passport Photo Studio</div>
+      <div class="info-badges">
+        <span class="info-chip">1.2" × 1.5" (360×450 px)</span>
+        <span class="info-chip">300 DPI Print Ready</span>
+        <span class="info-chip">IS-Net AI Background Removal</span>
+      </div>
+    </div>
+
+    <div class="pp-main-grid">
+      <!-- LEFT PANEL -->
+      <aside class="panel">
+        <div class="section-header">
+          <span class="step-title"><span class="step-num">01</span> Photo &amp; Templates</span>
+        </div>
+
+        <label class="btn-main btn-primary full-width" style="cursor:pointer;">
+          📷 Upload Portrait Photo
+          <input type="file" id="ppUpload" accept="image/*" hidden />
+        </label>
+
+        <div class="pp-status-box" id="ppAiStatus">🤖 HD Background Remove AI Ready</div>
+
+        <div class="control-label mt-14">Background Color</div>
+        <div class="pp-tpl-grid" id="ppBgTemplates">
+          <button class="pill-btn active" data-bg="#ffffff">Pure White</button>
+          <button class="pill-btn" data-bg="#dbeafe">Studio Blue</button>
+          <button class="pill-btn" data-bg="#f1f5f9">Soft Gray</button>
+          <button class="pill-btn" data-bg="original">Original BG</button>
+        </div>
+
+        <div class="control-label mt-14">Cutout Edge Precision</div>
+        <div class="pp-tpl-grid-3" id="ppEdgeTemplates">
+          <button class="pill-btn" data-edge="soft">Soft Hair</button>
+          <button class="pill-btn active" data-edge="natural">Balanced</button>
+          <button class="pill-btn" data-edge="tight">Tight Clean</button>
+        </div>
+
+        <div class="control-label mt-14">A4 Sheet Layout</div>
+        <div class="pp-tpl-grid" id="ppLayoutTemplates">
+          <button class="pill-btn active" data-rows="1">6 Photos (1 Row)</button>
+          <button class="pill-btn" data-rows="2">12 Photos (2 Rows)</button>
+          <button class="pill-btn" data-rows="3">18 Photos (3 Rows)</button>
+          <button class="pill-btn" data-rows="6">36 Photos (6 Rows)</button>
+        </div>
+
+        <div class="control-label mt-14">Border &amp; Tone Preset</div>
+        <div class="pp-tpl-grid" id="ppBorderTemplates">
+          <button class="pill-btn active" data-border="black3">Classic (3px)</button>
+          <button class="pill-btn" data-border="black1">Slim (1px)</button>
+          <button class="pill-btn" data-border="double">Double Frame</button>
+          <button class="pill-btn" data-border="none">No Border</button>
+        </div>
+        <div class="pp-tpl-grid mt-8" id="ppFilterTemplates">
+          <button class="pill-btn active" data-filter="none">Original Tone</button>
+          <button class="pill-btn" data-filter="brightness(1.06) contrast(1.05)">Studio Bright</button>
+          <button class="pill-btn" data-filter="saturate(1.12) sepia(0.08) brightness(1.03)">Warm Glow</button>
+          <button class="pill-btn" data-filter="grayscale(1) contrast(1.1)">B&amp;W Classic</button>
+        </div>
+      </aside>
+
+      <!-- CENTER PANEL -->
+      <div class="panel pp-crop-card">
+        <div class="section-header">
+          <span class="step-title"><span class="step-num">02</span> Framing &amp; Alignment</span>
+          <span class="studio-meta">1.2" × 1.5"</span>
+        </div>
+
+        <div class="pp-stage" id="ppCropStage">
+          <canvas id="ppCropCanvas" width="360" height="450"></canvas>
+
+          <svg class="pp-face-guide" id="ppFaceGuide" viewBox="0 0 360 450">
+            <ellipse cx="180" cy="185" rx="82" ry="108" fill="none" stroke="rgba(37,99,235,0.8)" stroke-width="2" stroke-dasharray="6,5"/>
+            <line x1="180" y1="20" x2="180" y2="430" stroke="rgba(37,99,235,0.4)" stroke-width="1.5" stroke-dasharray="4,4"/>
+            <line x1="20" y1="180" x2="340" y2="180" stroke="rgba(37,99,235,0.4)" stroke-width="1.5" stroke-dasharray="4,4"/>
+          </svg>
+
+          <div class="pp-overlay-msg" id="ppEmptyMsg">
+            <span class="drop-icon">🖼️</span>
+            <strong>Upload or Drop Photo Here</strong>
+            <span>Supports Ctrl+V Paste • Auto Pure White BG</span>
+          </div>
+
+          <div class="pp-loader-overlay" id="ppLoaderOverlay">
+            <div class="pp-spinner"></div>
+            <span id="ppLoaderText">Removing Background...</span>
+            <div class="pp-progress-track">
+              <div class="pp-progress-fill" id="ppProgressFill"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pp-zoom-bar">
+          <button class="pp-mini-btn" id="ppZoomOutBtn">−</button>
+          <input type="range" id="ppZoomSlider" min="0.4" max="4" step="0.01" value="1">
+          <button class="pp-mini-btn" id="ppZoomInBtn">+</button>
+          <span class="pp-zoom-val" id="ppZoomVal">100%</span>
+        </div>
+
+        <div class="pp-quick-actions">
+          <button class="pp-chip-btn" id="ppResetBtn">🔄 Reset Center</button>
+          <button class="pp-chip-btn" id="ppGuideBtn">👁️ Face Guide</button>
+        </div>
+
+        <div class="pp-controls-tip">
+          <strong>Controls:</strong> Drag to pan &bull; Mouse wheel or pinch to zoom.
+        </div>
+      </div>
+
+      <!-- RIGHT PANEL -->
+      <div class="panel studio-panel">
+        <div class="studio-toolbar">
+          <div>
+            <strong>A4 Print Sheet</strong>
+            <span class="studio-meta">300 DPI Export</span>
+          </div>
+          <span class="studio-badge">Ready</span>
+        </div>
+
+        <div class="pp-a4-wrap">
+          <canvas id="ppA4Canvas" width="620" height="877"></canvas>
+        </div>
+
+        <div class="pp-action-stack">
+          <button class="btn-main btn-success" id="ppDownloadBtn">⬇ Download A4 JPG (300 DPI)</button>
+          <button class="btn-main btn-primary" id="ppPrintBtn">🖨️ Direct Print A4</button>
+          <button class="btn-main btn-dark" id="ppAddMultiBtn">➕ Add to Multi-Page</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB 3: MULTI-PAGE A4 DOCUMENTS -->
+  <section id="multiTab" class="tab-view">
+    <div class="panel">
+      <div class="multi-topbar">
+        <div>
+          <h2 class="panel-heading">Multi-Page A4 Document Builder</h2>
+          <p class="panel-sub">Combine up to 50 scanned documents, Aadhaar sheets, or passport sheets into one PDF.</p>
+        </div>
+        <div class="multi-actions">
+          <button class="btn-inline btn-dark" onclick="addAadhaarToMultiPage()">➕ Aadhaar Page</button>
+          <button class="btn-inline btn-success" onclick="printMultiPages()">🖨️ Print All</button>
+          <button class="btn-inline btn-danger" onclick="downloadMultiPDF()">📄 Export PDF</button>
+          <button class="btn-inline btn-primary" onclick="downloadMultiJPGs()">🖼️ Export JPGs</button>
+          <button class="btn-inline btn-ghost-danger" onclick="clearAllDocs()">Clear</button>
+        </div>
+      </div>
+
+      <div class="drop-zone" id="multiDropZone">
+        <input type="file" id="multiFileInput" accept="image/*" multiple hidden />
+        <div class="drop-icon">📚</div>
+        <div class="drop-title">Select, Drag &amp; Drop Multiple Documents</div>
+        <div class="drop-sub">Supports up to 50 pages • Ctrl+V Paste supported</div>
+      </div>
+
+      <div class="multi-controls">
+        <label class="inline-check">
+          <input type="checkbox" id="multiAutoCropCheck" checked /> Auto-Crop Edges
+        </label>
+        <span class="divider">|</span>
+        <span class="control-inline-label">Filter:</span>
+        <div class="pill-group four inline-pills">
+          <button class="pill-btn active" data-mfilter="magic" onclick="setMultiFilter('magic', this)">CamScanner</button>
+          <button class="pill-btn" data-mfilter="bw" onclick="setMultiFilter('bw', this)">B&amp;W</button>
+          <button class="pill-btn" data-mfilter="bright" onclick="setMultiFilter('bright', this)">Bright</button>
+          <button class="pill-btn" data-mfilter="original" onclick="setMultiFilter('original', this)">Original</button>
+        </div>
+        <span class="divider">|</span>
+        <span class="control-inline-label">Margin:</span>
+        <select id="multiMarginSelect" class="select-compact">
+          <option value="8">Standard (8mm)</option>
+          <option value="0">Full Bleed (0mm)</option>
+          <option value="14">Wide (14mm)</option>
+        </select>
+      </div>
+
+      <div class="pages-grid" id="pagesGrid">
+        <div class="empty-state">No pages added yet. Upload documents or add sheets from Aadhaar / Passport tabs.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB 4: PDF / JPG RESIZE -->
+  <section id="resizeTab" class="tab-view">
+    <div class="workspace">
+      <aside class="panel">
+        <div class="section-header">
+          <span class="step-title"><span class="step-num">01</span> Upload PDF or Image</span>
+          <button class="mini-btn danger" id="resizeClearBtn" style="flex:0; padding:4px 10px; display:none;" onclick="clearResizeFile()">Clear</button>
+        </div>
+
+        <div class="drop-zone" id="resizeDropZone">
+          <input type="file" id="resizeFileInput" accept=".pdf,application/pdf,image/*" hidden />
+          <div class="drop-icon">📐</div>
+          <div class="drop-title">Select, Drop or Paste File</div>
+          <div class="drop-sub">Supports PDF, JPG, PNG, WebP</div>
+        </div>
+
+        <div class="file-meta-card" id="resizeFileMeta">
+          <div class="file-meta-info">
+            <div class="file-meta-name" id="resizeMetaName">file.jpg</div>
+            <div class="file-meta-sub" id="resizeMetaSub">JPG • 0 KB</div>
+          </div>
+          <span class="status-pill" id="resizeTypeBadge" style="margin-top:0;">JPG</span>
+        </div>
+
+        <div class="control-group">
+          <span class="step-title"><span class="step-num">02</span> Compression Mode</span>
+          <div class="pill-group mt-8">
+            <button class="pill-btn active" id="resizeModeTargetBtn" onclick="setResizeMode('target')">🎯 Target Size (KB/MB)</button>
+            <button class="pill-btn" id="resizeModeCustomBtn" onclick="setResizeMode('custom')">⚙️ Custom Quality</button>
+          </div>
+
+          <div id="targetSizePanel" class="mt-10">
+            <div class="pill-group three">
+              <button class="pill-btn" onclick="setTargetPreset(50, 'KB', this)">50 KB</button>
+              <button class="pill-btn" onclick="setTargetPreset(100, 'KB', this)">100 KB</button>
+              <button class="pill-btn active" onclick="setTargetPreset(200, 'KB', this)">200 KB</button>
+              <button class="pill-btn" onclick="setTargetPreset(300, 'KB', this)">300 KB</button>
+              <button class="pill-btn" onclick="setTargetPreset(500, 'KB', this)">500 KB</button>
+              <button class="pill-btn" onclick="setTargetPreset(1, 'MB', this)">1 MB</button>
+            </div>
+            <div class="input-row">
+              <input type="number" id="targetSizeVal" class="text-input" value="200" min="10" step="10" placeholder="Enter size" oninput="clearPresetHighlight()" />
+              <select id="targetSizeUnit" class="select-input" style="width:92px;" onchange="clearPresetHighlight()">
+                <option value="KB" selected>KB</option>
+                <option value="MB">MB</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="customSizePanel" class="mt-10" style="display:none;">
+            <div id="imgDimControls">
+              <div class="input-row">
+                <div style="flex:1;">
+                  <span class="mini-label">Width (px)</span>
+                  <input type="number" id="resizeWidthInput" class="text-input" min="20" placeholder="Width" oninput="onDimChange('w')" />
+                </div>
+                <div style="flex:1;">
+                  <span class="mini-label">Height (px)</span>
+                  <input type="number" id="resizeHeightInput" class="text-input" min="20" placeholder="Height" oninput="onDimChange('h')" />
+                </div>
+              </div>
+              <label class="checkbox-row">
+                <input type="checkbox" id="lockAspectCheck" checked /> Lock Aspect Ratio
+              </label>
+            </div>
+
+            <div id="pdfScaleControls" style="display:none;">
+              <div class="slider-row">
+                <span>PDF Scale</span>
+                <input type="range" id="pdfScaleSlider" min="40" max="150" value="100" oninput="document.getElementById('pdfScaleVal').innerText = this.value + '%'" />
+                <span id="pdfScaleVal" class="val-tag">100%</span>
+              </div>
+            </div>
+
+            <div class="slider-row">
+              <span>Quality</span>
+              <input type="range" id="resizeQualitySlider" min="10" max="100" value="75" oninput="document.getElementById('resizeQualityVal').innerText = this.value + '%'" />
+              <span id="resizeQualityVal" class="val-tag">75%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <span class="step-title"><span class="step-num">03</span> Output Format</span>
+          <select id="resizeOutputFormat" class="select-input mt-8" onchange="onOutputFormatChange()">
+            <option value="jpg">JPG Image (.jpg)</option>
+            <option value="pdf">PDF Document (.pdf)</option>
+            <option value="png">PNG Image (.png)</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <span class="step-title"><span class="step-num">04</span> Output Filename</span>
+          <div class="filename-wrap mt-8">
+            <input type="text" id="resizeFileNameInput" placeholder="Enter file name..." />
+            <span class="ext-badge" id="resizeFileExtBadge">.jpg</span>
+          </div>
+        </div>
+
+        <div class="action-bar">
+          <button class="btn-main btn-primary span-2" id="resizeApplyBtn" onclick="processResizeFile()" disabled>⚡ Resize &amp; Preview</button>
+          <button class="btn-main btn-success span-2" id="resizeDownloadBtn" onclick="downloadResizedFile()" disabled>⬇️ Download Resized File</button>
+        </div>
+      </aside>
+
+      <div class="panel studio-panel">
+        <div class="studio-toolbar">
+          <div>
+            <strong>Compression Preview</strong>
+            <span class="studio-meta" id="resizePreviewInfo">Upload a PDF or JPG to begin</span>
+          </div>
+        </div>
+
+        <div class="size-stats-grid">
+          <div class="stat-box">
+            <div class="stat-label">Original Size</div>
+            <div class="stat-value" id="statOrigSize">—</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">New Size</div>
+            <div class="stat-value green" id="statNewSize">—</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Saved</div>
+            <div class="stat-value amber" id="statSavedBadge">—</div>
+          </div>
+        </div>
+
+        <div class="resize-preview-stage">
+          <div class="resize-empty" id="resizeEmptyState">
+            Upload a PDF or Image to preview compression output
+          </div>
+          <canvas id="resizePreviewCanvas"></canvas>
+          <div class="pdf-nav-bar" id="resizePdfNav">
+            <button class="pdf-nav-btn" onclick="changeResizePdfPage(-1)">◀ Prev</button>
+            <span id="resizePdfPageLabel">Page 1 / 1</span>
+            <button class="pdf-nav-btn" onclick="changeResizePdfPage(1)">Next ▶</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- Shared Crop Modal -->
+<div class="modal-backdrop" id="cropModal">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3 id="cropModalTitle">Adjust Crop</h3>
+      <div class="header-actions">
+        <button class="btn-done" onclick="applyCrop()">✓ Apply</button>
+        <button class="btn-close" onclick="closeCropModal()">✕</button>
+      </div>
+    </div>
+    <div class="crop-stage">
+      <canvas id="cropCanvas"></canvas>
+    </div>
+    <div class="modal-footer">
+      <div class="tool-btns">
+        <button class="btn-sec" onclick="runAutoDetect()">Auto Detect</button>
+        <button class="btn-sec" onclick="rotateCropImage(-90)">↺ Rotate Left</button>
+        <button class="btn-sec" onclick="rotateCropImage(90)">↻ Rotate Right</button>
+        <button class="btn-sec" onclick="resetFullCorners()">Full Frame</button>
+      </div>
+      <button class="btn-done" onclick="applyCrop()">✓ Apply Crop</button>
+    </div>
+  </div>
+</div>
+
+<!-- Progress Overlay -->
+<div class="progress-backdrop" id="progressModal">
+  <div class="progress-box">
+    <strong id="progressText">Processing...</strong>
+    <div class="progress-bar-bg"><div class="progress-bar-fill" id="progressBar"></div></div>
+  </div>
+</div>
+
+<div class="toast" id="toastMsg"></div>
+<div id="printSheet"></div>
+
+<script src="js/core.js"></script>
+<script src="js/aadhaar.js"></script>
+</body>
+</html>
