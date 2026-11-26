@@ -376,7 +376,7 @@ async function loadCardPrintPdfPage(pageNum) {
 
   await page.render({ canvasContext: ctx, viewport: vp }).promise;
 
-  setProgress(true, 'Auto-detecting bottom scissor card...', 80);
+  setProgress(true, 'Locking onto horizontal dotted cutting line...', 80);
   const blob = await canvasToBlob(pageCanvas, 'image/png');
   pageCanvas.width = 0; pageCanvas.height = 0;
   const img = await blobToImage(blob);
@@ -386,19 +386,23 @@ async function loadCardPrintPdfPage(pageNum) {
   setProgress(false);
 }
 
-// Precision UIDAI e-Aadhaar Bottom Scissor-Cut Auto Detector (Matches real UIDAI PDF layout)
+// High-Res Detector: Exact Horizontal Dotted Cutting Line = Starting Point (topY)
 function detectBottomJointCorners(img) {
-  // If user uploaded an already-cropped wide card image directly, keep full frame
+  // Already-cropped wide card image directly uploaded
   if (img.width / img.height > 1.75) {
-    return [
-      { x: 0, y: 0 },
-      { x: img.width, y: 0 },
-      { x: img.width, y: img.height },
-      { x: 0, y: img.height }
-    ];
+    return {
+      foundScissor: false,
+      corners: [
+        { x: 0, y: 0 },
+        { x: img.width, y: 0 },
+        { x: img.width, y: img.height },
+        { x: 0, y: img.height }
+      ]
+    };
   }
 
-  const maxW = 600;
+  // Use 1100px width so thin 1px dotted cutting line stays crisp & never blurs out
+  const maxW = 1100;
   const scale = Math.min(1, maxW / img.width);
   const w = Math.round(img.width * scale);
   const h = Math.round(img.height * scale);
@@ -412,10 +416,10 @@ function detectBottomJointCorners(img) {
 
   const isInk = (x, y) => {
     const i = (y * w + x) * 4;
-    return data[i] < 238 || data[i + 1] < 238 || data[i + 2] < 238;
+    return data[i] < 244 || data[i + 1] < 244 || data[i + 2] < 244;
   };
 
-  // 1. Find exact outer Left & Right borders in the lower card zone (y: 74% to 91%)
+  // 1. Find exact outer Left & Right borders in lower card zone (y: 74%..91%)
   const yB0 = Math.floor(h * 0.74);
   const yB1 = Math.floor(h * 0.91);
   const yBH = Math.max(1, yB1 - yB0);
@@ -424,84 +428,99 @@ function detectBottomJointCorners(img) {
   for (let x = Math.floor(w * 0.01); x < Math.floor(w * 0.16); x++) {
     let hits = 0;
     for (let y = yB0; y < yB1; y++) if (isInk(x, y)) hits++;
-    if (hits > yBH * 0.35) { leftX = x; break; }
+    if (hits > yBH * 0.32) { leftX = x; break; }
   }
 
   let rightX = Math.floor(w * 0.944);
   for (let x = Math.floor(w * 0.99); x > Math.floor(w * 0.84); x--) {
     let hits = 0;
     for (let y = yB0; y < yB1; y++) if (isInk(x, y)) hits++;
-    if (hits > yBH * 0.35) { rightX = x; break; }
+    if (hits > yBH * 0.32) { rightX = x; break; }
   }
 
-  // 2. Find exact Bottom border (scan upwards from 98% to 84% inside Left..Right)
-  const xIn0 = leftX + Math.floor(w * 0.04);
-  const xIn1 = rightX - Math.floor(w * 0.04);
-  const xMidL = Math.floor(w * 0.47);
-  const xMidR = Math.floor(w * 0.53);
+  // 2. Find exact Bottom border (scan upwards from 98.5% to 84%)
+  const xL0 = leftX + Math.floor(w * 0.045);
+  const xL1 = Math.floor(w * 0.46);
+  const xR0 = Math.floor(w * 0.54);
+  const xR1 = rightX - Math.floor(w * 0.045);
 
   let bottomY = Math.floor(h * 0.94);
   for (let y = Math.floor(h * 0.985); y > Math.floor(h * 0.84); y--) {
     let hits = 0, total = 0;
-    for (let x = xIn0; x < xIn1; x++) {
-      if (x >= xMidL && x <= xMidR) continue;
-      total++;
-      if (isInk(x, y)) hits++;
-    }
+    for (let x = xL0; x < xL1; x++) { total++; if (isInk(x, y)) hits++; }
+    for (let x = xR0; x < xR1; x++) { total++; if (isInk(x, y)) hits++; }
     if (hits > total * 0.15) { bottomY = y; break; }
   }
 
-  // 3. Find Horizontal Scissor Cut Line between 60% and 78% height
-  // Inspect BOTH halves (excluding outer borders and center divider line)
-  const ySc0 = Math.floor(h * 0.60);
+  // 3. Find Exact Horizontal Dotted Cutting Line (56%..78% height)
+  // Both left half AND right half must show regular dashes on the SAME row, with white gap above
+  const ySc0 = Math.floor(h * 0.56);
   const ySc1 = Math.floor(h * 0.78);
   const rowStats = [];
 
   for (let y = ySc0; y <= ySc1; y++) {
-    let hits = 0, total = 0, transitions = 0, prevInk = false;
-    for (let x = xIn0; x < xIn1; x++) {
-      if (x >= xMidL && x <= xMidR) { prevInk = false; continue; }
+    let lHits = 0, lTrans = 0, prevL = false;
+    for (let x = xL0; x < xL1; x++) {
       const ink = isInk(x, y);
-      total++;
-      if (ink) hits++;
-      if (ink !== prevInk) transitions++;
-      prevInk = ink;
+      if (ink) lHits++;
+      if (ink !== prevL) lTrans++;
+      prevL = ink;
     }
-    rowStats.push({ y, inkRatio: hits / Math.max(1, total), transitions });
+    let rHits = 0, rTrans = 0, prevR = false;
+    for (let x = xR0; x < xR1; x++) {
+      const ink = isInk(x, y);
+      if (ink) rHits++;
+      if (ink !== prevR) rTrans++;
+      prevR = ink;
+    }
+
+    const lLen = Math.max(1, xL1 - xL0);
+    const rLen = Math.max(1, xR1 - xR0);
+    rowStats.push({
+      y,
+      lInk: lHits / lLen,
+      rInk: rHits / rLen,
+      lTrans,
+      rTrans,
+      avgInk: (lHits + rHits) / (lLen + rLen)
+    });
   }
 
-  // Locate the dashed scissor row (high dash transitions + white gap right above it)
   let topY = -1;
+  let foundScissor = false;
   let bestScore = -1;
 
-  for (let idx = 4; idx < rowStats.length - 4; idx++) {
+  for (let idx = 8; idx < rowStats.length - 6; idx++) {
     const r = rowStats[idx];
-    // Look for dashed line: 14+ transitions horizontally, 5%..75% ink
-    if (r.transitions >= 14 && r.inkRatio >= 0.05 && r.inkRatio <= 0.75) {
-      // Check clean white gap right above (idx-6 .. idx-2)
-      let aboveInkSum = 0;
-      const startAbove = Math.max(0, idx - 6);
-      for (let k = startAbove; k <= idx - 2; k++) aboveInkSum += rowStats[k].inkRatio;
-      const avgAbove = aboveInkSum / Math.max(1, idx - 1 - startAbove);
+    // Horizontal dotted line: dashed transitions on BOTH left & right halves simultaneously
+    if (r.lTrans >= 10 && r.rTrans >= 10 &&
+        r.lInk >= 0.03 && r.lInk <= 0.78 &&
+        r.rInk >= 0.03 && r.rInk <= 0.78) {
+      // Clean white band just above the dotted line (idx-9 .. idx-3)
+      let aboveSum = 0;
+      for (let k = idx - 9; k <= idx - 3; k++) aboveSum += rowStats[k].avgInk;
+      const aboveAvg = aboveSum / 7;
 
-      if (avgAbove < 0.03) {
-        const score = r.transitions + (r.y / h) * 20; // prefer genuine lower cut line
+      if (aboveAvg < 0.03) {
+        const score = (r.lTrans + r.rTrans) + (r.y / h) * 30;
         if (score > bestScore) {
           bestScore = score;
-          topY = r.y + 1;
+          // Exact horizontal dotted cutting line is the starting point!
+          topY = r.y;
+          foundScissor = true;
         }
       }
     }
   }
 
-  // Fallback if dashed line was too faint: find lowest clean white band before the bottom card
+  // Fallback: lowest white gap right above bottom card
   if (topY === -1) {
     let blankRun = 0;
     for (let idx = rowStats.length - 1; idx >= 0; idx--) {
-      if (rowStats[idx].inkRatio < 0.015) {
+      if (rowStats[idx].avgInk < 0.015) {
         blankRun++;
       } else {
-        if (blankRun >= 3 && rowStats[idx].y < h * 0.75) {
+        if (blankRun >= 4 && rowStats[idx].y < h * 0.75) {
           topY = rowStats[idx + blankRun].y;
           break;
         }
@@ -510,14 +529,17 @@ function detectBottomJointCorners(img) {
     }
   }
 
-  // Final UIDAI standard fallback
-  if (topY === -1 || (bottomY - topY) < h * 0.14 || (bottomY - topY) > h * 0.32) {
-    return [
-      { x: img.width * 0.055, y: img.height * 0.722 },
-      { x: img.width * 0.945, y: img.height * 0.722 },
-      { x: img.width * 0.945, y: img.height * 0.941 },
-      { x: img.width * 0.055, y: img.height * 0.941 }
-    ];
+  // Standard UIDAI fallback if PDF was extremely faint/blank
+  if (topY === -1 || (bottomY - topY) < h * 0.14 || (bottomY - topY) > h * 0.34) {
+    return {
+      foundScissor: false,
+      corners: [
+        { x: img.width * 0.055, y: img.height * 0.721 },
+        { x: img.width * 0.945, y: img.height * 0.721 },
+        { x: img.width * 0.945, y: img.height * 0.941 },
+        { x: img.width * 0.055, y: img.height * 0.941 }
+      ]
+    };
   }
 
   const lx = Math.max(0, leftX - 1) / scale;
@@ -525,35 +547,42 @@ function detectBottomJointCorners(img) {
   const ty = Math.max(0, topY) / scale;
   const by = Math.min(h, bottomY + 2) / scale;
 
-  return [
-    { x: lx, y: ty },
-    { x: rx, y: ty },
-    { x: rx, y: by },
-    { x: lx, y: by }
-  ];
+  return {
+    foundScissor,
+    corners: [
+      { x: lx, y: ty },
+      { x: rx, y: ty },
+      { x: rx, y: by },
+      { x: lx, y: by }
+    ]
+  };
 }
 
 async function extractBottomJointCard(img) {
   const slot = cpState.slots[cpState.activeSlot];
-  const corners = detectBottomJointCorners(img);
-  slot.corners = corners;
+  const det = detectBottomJointCorners(img);
+  slot.corners = det.corners;
   slot.innerScale = 1.0;
   slot.innerXMm = 0;
   slot.innerYMm = 0;
 
   const targetW = slot.cardMode === 'single' ? 1011 : 2022;
   if (slot.cardCanvas) { slot.cardCanvas.width = 0; slot.cardCanvas.height = 0; }
-  slot.cardCanvas = await warpPerspectiveAsync(img, corners, targetW, 638);
+  slot.cardCanvas = await warpPerspectiveAsync(img, det.corners, targetW, 638);
   syncSlotPanelUI();
   syncInsideZoomUI();
   renderCardPrintA4();
-  showToast(`Bottom Aadhaar card extracted!`);
+  showToast(
+    det.foundScissor
+      ? 'Cropped from horizontal dotted cutting line!'
+      : 'Bottom Aadhaar card extracted!'
+  );
 }
 
 async function reAutoDetectBottomCard() {
   const slot = cpState.slots[cpState.activeSlot];
   if (!slot.pageImg) { alert('Please upload an e-Aadhaar PDF or image first.'); return; }
-  setProgress(true, 'Re-detecting bottom scissor card...', 60);
+  setProgress(true, 'Detecting horizontal dotted cutting line...', 60);
   await extractBottomJointCard(slot.pageImg);
   setProgress(false);
 }
