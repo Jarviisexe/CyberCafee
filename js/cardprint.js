@@ -386,7 +386,8 @@ async function loadCardPrintPdfPage(pageNum) {
   setProgress(false);
 }
 
-// High-Res Detector: Exact Horizontal Dotted Cutting Line = Starting Point (topY)
+// Precision UIDAI Scissor-Cut Auto Detector
+// Starts EXACTLY at the Horizontal Dotted Cutting Line just above the National Emblem logo!
 function detectBottomJointCorners(img) {
   // Already-cropped wide card image directly uploaded
   if (img.width / img.height > 1.75) {
@@ -401,7 +402,6 @@ function detectBottomJointCorners(img) {
     };
   }
 
-  // Use 1100px width so thin 1px dotted cutting line stays crisp & never blurs out
   const maxW = 1100;
   const scale = Math.min(1, maxW / img.width);
   const w = Math.round(img.width * scale);
@@ -414,114 +414,126 @@ function detectBottomJointCorners(img) {
   const data = ctx.getImageData(0, 0, w, h).data;
   c.width = 0; c.height = 0;
 
-  const isInk = (x, y) => {
+  // Sensitive ink check for dark borders and light-gray dashed cutting line
+  const isInk = (x, y, thresh = 238) => {
     const i = (y * w + x) * 4;
-    return data[i] < 244 || data[i + 1] < 244 || data[i + 2] < 244;
+    return data[i] < thresh || data[i + 1] < thresh || data[i + 2] < thresh;
   };
 
-  // 1. Find exact outer Left & Right borders in lower card zone (y: 74%..91%)
-  const yB0 = Math.floor(h * 0.74);
-  const yB1 = Math.floor(h * 0.91);
+  // 1. Find exact outer Left & Right borders in lower card zone (y: 75%..90%)
+  const yB0 = Math.floor(h * 0.75);
+  const yB1 = Math.floor(h * 0.90);
   const yBH = Math.max(1, yB1 - yB0);
 
-  let leftX = Math.floor(w * 0.056);
+  let leftX = Math.floor(w * 0.077);
   for (let x = Math.floor(w * 0.01); x < Math.floor(w * 0.16); x++) {
     let hits = 0;
-    for (let y = yB0; y < yB1; y++) if (isInk(x, y)) hits++;
-    if (hits > yBH * 0.32) { leftX = x; break; }
+    for (let y = yB0; y < yB1; y++) if (isInk(x, y, 225)) hits++;
+    if (hits > yBH * 0.40) { leftX = x; break; }
   }
 
-  let rightX = Math.floor(w * 0.944);
+  let rightX = Math.floor(w * 0.923);
   for (let x = Math.floor(w * 0.99); x > Math.floor(w * 0.84); x--) {
     let hits = 0;
-    for (let y = yB0; y < yB1; y++) if (isInk(x, y)) hits++;
-    if (hits > yBH * 0.32) { rightX = x; break; }
+    for (let y = yB0; y < yB1; y++) if (isInk(x, y, 225)) hits++;
+    if (hits > yBH * 0.40) { rightX = x; break; }
   }
 
-  // 2. Find exact Bottom border (scan upwards from 98.5% to 84%)
-  const xL0 = leftX + Math.floor(w * 0.045);
-  const xL1 = Math.floor(w * 0.46);
-  const xR0 = Math.floor(w * 0.54);
-  const xR1 = rightX - Math.floor(w * 0.045);
+  // Safe inner horizontal bands (avoids outer borders, center divider AND scissor icons at ~46% and ~90%)
+  const xL0 = leftX + Math.floor(w * 0.04);
+  const xL1 = Math.floor(w * 0.42);
+  const xR0 = Math.floor(w * 0.56);
+  const xR1 = rightX - Math.floor(w * 0.065);
 
-  let bottomY = Math.floor(h * 0.94);
+  // 2. Find exact Bottom outer border (scan upwards from 98.5% to 84%)
+  let bottomY = Math.floor(h * 0.927);
   for (let y = Math.floor(h * 0.985); y > Math.floor(h * 0.84); y--) {
     let hits = 0, total = 0;
-    for (let x = xL0; x < xL1; x++) { total++; if (isInk(x, y)) hits++; }
-    for (let x = xR0; x < xR1; x++) { total++; if (isInk(x, y)) hits++; }
-    if (hits > total * 0.15) { bottomY = y; break; }
+    for (let x = xL0; x < xL1; x++) { total++; if (isInk(x, y, 225)) hits++; }
+    for (let x = xR0; x < xR1; x++) { total++; if (isInk(x, y, 225)) hits++; }
+    if (hits > total * 0.18) { bottomY = y; break; }
   }
 
-  // 3. Find Exact Horizontal Dotted Cutting Line (56%..78% height)
-  // Both left half AND right half must show regular dashes on the SAME row, with white gap above
-  const ySc0 = Math.floor(h * 0.56);
-  const ySc1 = Math.floor(h * 0.78);
-  const rowStats = [];
+  // 3. Find Exact Horizontal Dotted Cutting Line (60%..77% height)
+  const ySc0 = Math.floor(h * 0.60);
+  const ySc1 = Math.floor(h * 0.77);
 
-  for (let y = ySc0; y <= ySc1; y++) {
-    let lHits = 0, lTrans = 0, prevL = false;
-    for (let x = xL0; x < xL1; x++) {
-      const ink = isInk(x, y);
-      if (ink) lHits++;
-      if (ink !== prevL) lTrans++;
-      prevL = ink;
+  const scanDottedRows = (thresh) => {
+    const stats = [];
+    for (let y = ySc0; y <= ySc1; y++) {
+      let lHits = 0, lTrans = 0, prevL = false;
+      for (let x = xL0; x < xL1; x++) {
+        const ink = isInk(x, y, thresh);
+        if (ink) lHits++;
+        if (ink !== prevL) lTrans++;
+        prevL = ink;
+      }
+      let rHits = 0, rTrans = 0, prevR = false;
+      for (let x = xR0; x < xR1; x++) {
+        const ink = isInk(x, y, thresh);
+        if (ink) rHits++;
+        if (ink !== prevR) rTrans++;
+        prevR = ink;
+      }
+      const lLen = Math.max(1, xL1 - xL0);
+      const rLen = Math.max(1, xR1 - xR0);
+      stats.push({
+        y,
+        lInk: lHits / lLen,
+        rInk: rHits / rLen,
+        lTrans,
+        rTrans,
+        avgInk: (lHits + rHits) / (lLen + rLen)
+      });
     }
-    let rHits = 0, rTrans = 0, prevR = false;
-    for (let x = xR0; x < xR1; x++) {
-      const ink = isInk(x, y);
-      if (ink) rHits++;
-      if (ink !== prevR) rTrans++;
-      prevR = ink;
-    }
 
-    const lLen = Math.max(1, xL1 - xL0);
-    const rLen = Math.max(1, xR1 - xR0);
-    rowStats.push({
-      y,
-      lInk: lHits / lLen,
-      rInk: rHits / rLen,
-      lTrans,
-      rTrans,
-      avgInk: (lHits + rHits) / (lLen + rLen)
-    });
-  }
+    let bestY = -1;
+    let bestScore = -1;
 
-  let topY = -1;
-  let foundScissor = false;
-  let bestScore = -1;
+    for (let idx = 8; idx < stats.length - 8; idx++) {
+      const r = stats[idx];
+      // Horizontal dotted cutting line has dashes on BOTH left & right halves
+      if (r.lTrans >= 10 && r.rTrans >= 10 &&
+          r.lInk >= 0.03 && r.lInk <= 0.80 &&
+          r.rInk >= 0.03 && r.rInk <= 0.80) {
+        // Right half directly above (idx-8 .. idx-3) is clean white (below bullet list)
+        let aboveR = 0;
+        for (let k = idx - 8; k <= idx - 3; k++) aboveR += stats[k].rInk;
+        aboveR /= 6;
 
-  for (let idx = 8; idx < rowStats.length - 6; idx++) {
-    const r = rowStats[idx];
-    // Horizontal dotted line: dashed transitions on BOTH left & right halves simultaneously
-    if (r.lTrans >= 10 && r.rTrans >= 10 &&
-        r.lInk >= 0.03 && r.lInk <= 0.78 &&
-        r.rInk >= 0.03 && r.rInk <= 0.78) {
-      // Clean white band just above the dotted line (idx-9 .. idx-3)
-      let aboveSum = 0;
-      for (let k = idx - 9; k <= idx - 3; k++) aboveSum += rowStats[k].avgInk;
-      const aboveAvg = aboveSum / 7;
+        // Clean white gap directly below (idx+3 .. idx+6) before National Emblem / Govt header
+        let belowAvg = 0;
+        for (let k = idx + 3; k <= idx + 6; k++) belowAvg += stats[k].avgInk;
+        belowAvg /= 4;
 
-      if (aboveAvg < 0.03) {
-        const score = (r.lTrans + r.rTrans) + (r.y / h) * 30;
-        if (score > bestScore) {
-          bestScore = score;
-          // Exact horizontal dotted cutting line is the starting point!
-          topY = r.y;
-          foundScissor = true;
+        if (aboveR < 0.025 && belowAvg < 0.08) {
+          const score = (r.lTrans + r.rTrans) + (r.y / h) * 35;
+          if (score > bestScore) {
+            bestScore = score;
+            bestY = r.y; // Exact starting point on horizontal dotted cutting line!
+          }
         }
       }
     }
-  }
+    return { bestY, stats };
+  };
 
-  // Fallback: lowest white gap right above bottom card
+  let res = scanDottedRows(236);
+  if (res.bestY === -1) res = scanDottedRows(246); // softer pass for faint dashed lines
+
+  let topY = res.bestY;
+  const foundScissor = topY !== -1;
+
+  // Fallback: locate clean white gap right above National Emblem (~71%..73%)
   if (topY === -1) {
+    const stats = res.stats;
     let blankRun = 0;
-    for (let idx = rowStats.length - 1; idx >= 0; idx--) {
-      if (rowStats[idx].avgInk < 0.015) {
+    for (let idx = stats.length - 1; idx >= 0; idx--) {
+      if (stats[idx].avgInk < 0.015) {
         blankRun++;
       } else {
-        if (blankRun >= 4 && rowStats[idx].y < h * 0.75) {
-          topY = rowStats[idx + blankRun].y;
+        if (blankRun >= 4 && stats[idx].y < h * 0.75) {
+          topY = stats[idx + Math.floor(blankRun / 2)].y;
           break;
         }
         blankRun = 0;
@@ -529,15 +541,15 @@ function detectBottomJointCorners(img) {
     }
   }
 
-  // Standard UIDAI fallback if PDF was extremely faint/blank
-  if (topY === -1 || (bottomY - topY) < h * 0.14 || (bottomY - topY) > h * 0.34) {
+  // Final UIDAI standard fallback calibrated to exact e-Aadhaar PDF
+  if (topY === -1 || (bottomY - topY) < h * 0.14 || (bottomY - topY) > h * 0.30) {
     return {
       foundScissor: false,
       corners: [
-        { x: img.width * 0.055, y: img.height * 0.721 },
-        { x: img.width * 0.945, y: img.height * 0.721 },
-        { x: img.width * 0.945, y: img.height * 0.941 },
-        { x: img.width * 0.055, y: img.height * 0.941 }
+        { x: img.width * 0.077, y: img.height * 0.721 },
+        { x: img.width * 0.923, y: img.height * 0.721 },
+        { x: img.width * 0.923, y: img.height * 0.928 },
+        { x: img.width * 0.077, y: img.height * 0.928 }
       ]
     };
   }
