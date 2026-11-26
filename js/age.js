@@ -1,45 +1,111 @@
-// Age Calculator Module
+// Age Calculator Module (Supports Manual DD/MM/YYYY Typing & Calendar Picker)
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-function toInputDateStr(date) {
+function formatDDMMYYYY(date) {
+  const d = String(date.getDate()).padStart(2, '0');
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const y = date.getFullYear();
+  return `${d}/${m}/${y}`;
+}
+
+function formatYYYYMMDD(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 }
 
-function resetAgeToday() {
-  document.getElementById('ageTargetInput').value = toInputDateStr(new Date());
+// Strictly parses DD/MM/YYYY (rejects invalid dates like 31/02/2000)
+function parseDDMMYYYY(str) {
+  const cleaned = (str || '').trim().replace(/[-.]/g, '/');
+  const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(cleaned);
+  if (!match) return null;
+
+  const d = parseInt(match[1], 10);
+  const m = parseInt(match[2], 10);
+  const y = parseInt(match[3], 10);
+  if (y < 1900 || y > 2150 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+
+  const dt = new Date(y, m - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
+  return dt;
+}
+
+function openNativePicker(pickerId) {
+  const el = document.getElementById(pickerId);
+  if (el.showPicker) el.showPicker();
+  else el.click();
+}
+
+function onManualDateInput(which) {
+  const textEl = document.getElementById(which === 'dob' ? 'ageDobText' : 'ageTargetText');
+  const pickerEl = document.getElementById(which === 'dob' ? 'ageDobPicker' : 'ageTargetPicker');
+
+  // Auto-insert slashes as user types digits (e.g. 15082000 -> 15/08/2000)
+  let digits = textEl.value.replace(/\D/g, '').slice(0, 8);
+  let formatted = digits;
+  if (digits.length > 4) formatted = `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+  else if (digits.length > 2) formatted = `${digits.slice(0, 2)}/${digits.slice(2)}`;
+
+  if (textEl.value !== formatted) textEl.value = formatted;
+
+  const parsed = parseDDMMYYYY(formatted);
+  if (parsed) {
+    pickerEl.value = formatYYYYMMDD(parsed);
+  }
   calculateAge();
 }
 
-function parseLocalDate(val) {
-  if (!val) return null;
-  const [y, m, d] = val.split('-').map(Number);
-  if (!y || !m || !d) return null;
-  return new Date(y, m - 1, d);
+function onPickerDateChange(which) {
+  const textEl = document.getElementById(which === 'dob' ? 'ageDobText' : 'ageTargetText');
+  const pickerEl = document.getElementById(which === 'dob' ? 'ageDobPicker' : 'ageTargetPicker');
+  if (pickerEl.value) {
+    const [y, m, d] = pickerEl.value.split('-').map(Number);
+    textEl.value = formatDDMMYYYY(new Date(y, m - 1, d));
+  }
+  calculateAge();
+}
+
+function resetAgeToday() {
+  const today = new Date();
+  document.getElementById('ageTargetText').value = formatDDMMYYYY(today);
+  document.getElementById('ageTargetPicker').value = formatYYYYMMDD(today);
+  calculateAge();
+}
+
+function clearAgeStats(statusMsg) {
+  document.getElementById('ageHeroValue').innerText = '— Years, — Months, — Days';
+  document.getElementById('ageCategoryBadge').innerText = statusMsg;
+  document.getElementById('ageBornDay').innerText = '—';
+  document.getElementById('ageTotalMonths').innerText = '—';
+  document.getElementById('ageTotalWeeks').innerText = '—';
+  document.getElementById('ageTotalDays').innerText = '—';
+  document.getElementById('ageTotalHours').innerText = '—';
+  document.getElementById('ageNextBday').innerText = '—';
+  document.getElementById('ageNextBdaySub').innerText = 'Waiting for valid DOB';
 }
 
 function calculateAge() {
-  const dob = parseLocalDate(document.getElementById('ageDobInput').value);
-  const target = parseLocalDate(document.getElementById('ageTargetInput').value) || new Date();
+  const dobText = document.getElementById('ageDobText').value;
+  const targetText = document.getElementById('ageTargetText').value;
 
-  const heroEl = document.getElementById('ageHeroValue');
-  const catEl = document.getElementById('ageCategoryBadge');
+  const dob = parseDDMMYYYY(dobText);
+  const target = parseDDMMYYYY(targetText) || new Date();
   const sumEl = document.getElementById('ageSummaryText');
 
   if (!dob) {
-    heroEl.innerText = '— Years, — Months, — Days';
-    catEl.innerText = 'Select DOB';
-    sumEl.innerText = 'Enter your Date of Birth to see full breakdown';
+    clearAgeStats(dobText.length >= 10 ? 'Invalid Date' : 'Enter DOB');
+    sumEl.innerText = dobText.length >= 10
+      ? 'Please enter a valid date in DD/MM/YYYY format'
+      : 'Type DD/MM/YYYY or choose from calendar';
     return;
   }
 
   if (dob > target) {
-    heroEl.innerText = 'DOB cannot be after target date';
-    catEl.innerText = 'Invalid';
-    sumEl.innerText = 'Please select a valid Date of Birth';
+    clearAgeStats('Invalid Range');
+    document.getElementById('ageHeroValue').innerText = 'DOB cannot be after target date';
+    sumEl.innerText = 'Please enter a Date of Birth earlier than Target Date';
     return;
   }
 
@@ -49,16 +115,16 @@ function calculateAge() {
 
   if (days < 0) {
     months--;
-    const prevMonthDays = new Date(target.getFullYear(), target.getMonth(), 0).getDate();
-    days += prevMonthDays;
+    days += new Date(target.getFullYear(), target.getMonth(), 0).getDate();
   }
   if (months < 0) {
     years--;
     months += 12;
   }
 
-  heroEl.innerText = `${years} Years, ${months} Months, ${days} Days`;
+  document.getElementById('ageHeroValue').innerText = `${years} Years, ${months} Months, ${days} Days`;
 
+  const catEl = document.getElementById('ageCategoryBadge');
   if (years >= 60) {
     catEl.innerText = 'Senior Citizen (60+)';
     catEl.style.color = '#fbbf24';
@@ -75,7 +141,6 @@ function calculateAge() {
   const totalMonths = years * 12 + months;
   const totalHours = totalDays * 24;
 
-  // Next Birthday Calculation relative to target date
   let nextBday = new Date(target.getFullYear(), dob.getMonth(), dob.getDate());
   if (nextBday <= target) {
     nextBday = new Date(target.getFullYear() + 1, dob.getMonth(), dob.getDate());
@@ -105,7 +170,7 @@ function calculateAge() {
       `On ${nextBday.getDate()} ${MONTHS_SHORT[nextBday.getMonth()]} (${WEEKDAYS[nextBday.getDay()]})`;
   }
 
-  sumEl.innerText = `DOB: ${dob.getDate()} ${MONTHS_SHORT[dob.getMonth()]} ${dob.getFullYear()} • Age: ${years}y ${months}m ${days}d`;
+  sumEl.innerText = `DOB: ${formatDDMMYYYY(dob)} • Age: ${years}y ${months}m ${days}d`;
 }
 
 function copyAgeSummary() {
@@ -117,5 +182,4 @@ function copyAgeSummary() {
   });
 }
 
-// Set Target Date to Today on load
 resetAgeToday();

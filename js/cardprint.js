@@ -1,16 +1,16 @@
-// e-Aadhaar & PVC Smart Card Print Engine (8.56 cm x 5.4 cm @ 300 DPI)
-const CP_CARD_W_MM = 85.6; // 8.56 cm = 3.37 inches
-const CP_CARD_H_MM = 54.0; // 5.40 cm = 2.13 inches
-const CP_CARD_W_300 = 1011; // 85.6mm @ 300 DPI
-const CP_CARD_H_300 = 638;  // 54.0mm @ 300 DPI
+// e-Aadhaar Joint Card Print Engine
+// Single side = 8.56 x 5.40 cm (3.37" x 2.13") | Joint Front+Back = 17.12 x 5.40 cm @ 300 DPI
+const CP_SINGLE_W_MM = 85.6;
+const CP_JOINT_W_MM = 171.2;
+const CP_CARD_H_MM = 54.0;
 
 const cpState = {
   pdfBuffer: null,
   pdfDoc: null,
   pageImg: null,
-  front: { canvas: null, corners: null },
-  back:  { canvas: null, corners: null },
-  layout: 'row', // 'row' (side-by-side) | 'col' (top-bottom)
+  cardCanvas: null,
+  corners: null,
+  cardMode: 'joint', // 'joint' (17.12 x 5.4 cm) | 'single' (8.56 x 5.4 cm)
   borderColor: '#000000',
   pendingPdfResolve: null
 };
@@ -18,7 +18,6 @@ const cpState = {
 const cpZone = document.getElementById('cpDropZone');
 const cpInput = document.getElementById('cpFileInput');
 
-cpZone.addEventListener('click', () => cpInput.click());
 cpInput.addEventListener('change', (e) => {
   if (e.target.files?.[0]) {
     handleCardPrintUpload(e.target.files[0]);
@@ -58,7 +57,7 @@ async function handleCardPrintUpload(file) {
       const pdfDoc = await openPdfWithOptionalPassword(pdfLib, rawBuf);
       if (!pdfDoc) {
         setProgress(false);
-        return; // Cancelled by user
+        return;
       }
 
       cpState.pdfDoc = pdfDoc;
@@ -89,7 +88,7 @@ async function handleCardPrintUpload(file) {
     cpState.pageImg = img;
     document.getElementById('cpPageNavWrap').style.display = 'none';
     document.getElementById('cpFileSub').innerText = `Image • ${img.width}×${img.height}px`;
-    await extractBottomCardsFromPageImg(img);
+    await extractBottomJointCard(img);
     setProgress(false);
   }
 }
@@ -99,7 +98,6 @@ async function openPdfWithOptionalPassword(pdfLib, rawBuf) {
   let password = '';
   while (true) {
     try {
-      // Always pass a fresh Uint8Array copy so pdf.js worker never detaches our rawBuf
       const task = pdfLib.getDocument({ data: new Uint8Array(rawBuf.slice(0)), password });
       return await task.promise;
     } catch (err) {
@@ -109,7 +107,7 @@ async function openPdfWithOptionalPassword(pdfLib, rawBuf) {
         const entered = await askPdfPasswordModal(
           isWrong ? 'Wrong password! Please check and try again.' : ''
         );
-        if (entered === null) return null; // cancelled
+        if (entered === null) return null;
         password = entered;
         setProgress(true, 'Unlocking PDF...', 45);
       } else {
@@ -168,7 +166,6 @@ async function loadCardPrintPdfPage(pageNum) {
 
   const page = await cpState.pdfDoc.getPage(pageNum);
   const vp1 = page.getViewport({ scale: 1.0 });
-  // Target ~2480px width (300 DPI on A4)
   const scale = Math.min(4.2, Math.max(2.5, 2480 / vp1.width));
   const vp = page.getViewport({ scale });
 
@@ -181,18 +178,18 @@ async function loadCardPrintPdfPage(pageNum) {
 
   await page.render({ canvasContext: ctx, viewport: vp }).promise;
 
-  setProgress(true, 'Auto-detecting bottom Aadhaar cards...', 80);
+  setProgress(true, 'Auto-detecting bottom joint card...', 80);
   const blob = await canvasToBlob(pageCanvas, 'image/png');
   pageCanvas.width = 0; pageCanvas.height = 0;
   const img = await blobToImage(blob);
   cpState.pageImg = img;
 
-  await extractBottomCardsFromPageImg(img);
+  await extractBottomJointCard(img);
   setProgress(false);
 }
 
-// Smart detector: ignores upper letter, detects ONLY bottom Front & Back cards
-function detectBottomAadhaarCards(img) {
+// Auto-detect ONLY the bottom joint card (Front + Back together, ignoring top letter)
+function detectBottomJointCorners(img) {
   const maxW = 600;
   const scale = Math.min(1, maxW / img.width);
   const w = Math.round(img.width * scale);
@@ -205,7 +202,7 @@ function detectBottomAadhaarCards(img) {
   const data = ctx.getImageData(0, 0, w, h).data;
   c.width = 0; c.height = 0;
 
-  // 1. Scan lower half (from 50% to 98% height) for the horizontal cut/gap separating letter & bottom cards
+  // 1. Find the clean horizontal gap/cut-line separating top letter & bottom joint card (50% to 72% height)
   const yScanStart = Math.floor(h * 0.50);
   const yScanEnd = Math.floor(h * 0.72);
   const rowInk = new Float32Array(h);
@@ -219,44 +216,38 @@ function detectBottomAadhaarCards(img) {
     rowInk[y] = ink / (w * 0.92);
   }
 
-  // Find lowest strong whitespace band (or cut-line row) between 52% and 70% height
   let splitY = Math.floor(h * 0.61);
   let bestBlankRun = 0, curRun = 0, runEnd = splitY;
   for (let y = yScanStart; y <= yScanEnd; y++) {
     if (rowInk[y] < 0.015) {
       curRun++;
-      if (curRun >= bestBlankRun) {
-        bestBlankRun = curRun;
-        runEnd = y;
-      }
+      if (curRun >= bestBlankRun) { bestBlankRun = curRun; runEnd = y; }
     } else {
       curRun = 0;
     }
   }
-  if (bestBlankRun >= 4) {
-    splitY = runEnd;
+  if (bestBlankRun >= 4) splitY = runEnd;
+
+  // 2. Find tight bounding box across FULL width below splitY
+  const x0 = Math.floor(w * 0.02);
+  const x1 = Math.floor(w * 0.98);
+  const y1 = Math.floor(h * 0.975);
+  const rw = x1 - x0;
+
+  let top = -1, bottom = -1, left = -1, right = -1;
+  for (let y = splitY; y < y1; y++) {
+    let count = 0;
+    for (let x = x0; x < x1; x++) {
+      const i = (y * w + x) * 4;
+      if (data[i] < 242 || data[i + 1] < 242 || data[i + 2] < 242) count++;
+    }
+    if (count > rw * 0.02) {
+      if (top === -1) top = y;
+      bottom = y;
+    }
   }
 
-  // Helper: find tight content box inside a region, ignoring tiny scissor-dot noise
-  const findBox = (x0, x1, y0, y1) => {
-    const rw = x1 - x0;
-    const rh = y1 - y0;
-    let top = -1, bottom = -1, left = -1, right = -1;
-
-    for (let y = y0; y < y1; y++) {
-      let count = 0;
-      for (let x = x0; x < x1; x++) {
-        const i = (y * w + x) * 4;
-        if (data[i] < 242 || data[i + 1] < 242 || data[i + 2] < 242) count++;
-      }
-      if (count > rw * 0.025) {
-        if (top === -1) top = y;
-        bottom = y;
-      }
-    }
-
-    if (top === -1 || (bottom - top) < rh * 0.25) return null;
-
+  if (top !== -1 && (bottom - top) >= h * 0.14) {
     for (let x = x0; x < x1; x++) {
       let count = 0;
       for (let y = top; y <= bottom; y++) {
@@ -268,16 +259,15 @@ function detectBottomAadhaarCards(img) {
         right = x;
       }
     }
+  }
 
-    if (left === -1 || (right - left) < rw * 0.35) return null;
+  const ratio = (left !== -1 && right > left && bottom > top) ? (right - left) / (bottom - top) : 0;
+  // Valid joint strip ratio (~3.17) or single card ratio (~1.58)
+  const isValidRatio = cpState.cardMode === 'joint'
+    ? (ratio >= 2.2 && ratio <= 4.1)
+    : (ratio >= 1.15 && ratio <= 2.2);
 
-    const bw = right - left;
-    const bh = bottom - top;
-    const ratio = bw / Math.max(1, bh);
-    // Validate roughly card-shaped (PVC 85.6:54 = 1.585)
-    if (ratio < 1.15 || ratio > 2.2) return null;
-
-    // Slight clean outward padding (1px)
+  if (isValidRatio) {
     const lx = Math.max(0, left - 1) / scale;
     const ty = Math.max(0, top - 1) / scale;
     const rx = Math.min(w, right + 2) / scale;
@@ -288,91 +278,73 @@ function detectBottomAadhaarCards(img) {
       { x: rx, y: by },
       { x: lx, y: by }
     ];
-  };
-
-  const yBottomLimit = Math.floor(h * 0.975);
-  const midLeftEnd = Math.floor(w * 0.492);
-  const midRightStart = Math.floor(w * 0.508);
-
-  let frontCorners = findBox(Math.floor(w * 0.02), midLeftEnd, splitY, yBottomLimit);
-  let backCorners = findBox(midRightStart, Math.floor(w * 0.98), splitY, yBottomLimit);
-
-  // Fallback to standard UIDAI e-Aadhaar bottom card coordinates if borders/scan are unusual
-  if (!frontCorners) {
-    frontCorners = [
-      { x: img.width * 0.055, y: img.height * 0.642 },
-      { x: img.width * 0.478, y: img.height * 0.642 },
-      { x: img.width * 0.478, y: img.height * 0.908 },
-      { x: img.width * 0.055, y: img.height * 0.908 }
-    ];
-  }
-  if (!backCorners) {
-    backCorners = [
-      { x: img.width * 0.522, y: img.height * 0.642 },
-      { x: img.width * 0.945, y: img.height * 0.642 },
-      { x: img.width * 0.945, y: img.height * 0.908 },
-      { x: img.width * 0.522, y: img.height * 0.908 }
-    ];
   }
 
-  return { frontCorners, backCorners };
+  // Fallback UIDAI e-Aadhaar standard bottom joint strip coordinates
+  return [
+    { x: img.width * 0.048, y: img.height * 0.638 },
+    { x: img.width * 0.952, y: img.height * 0.638 },
+    { x: img.width * 0.952, y: img.height * 0.912 },
+    { x: img.width * 0.048, y: img.height * 0.912 }
+  ];
 }
 
-async function extractBottomCardsFromPageImg(img) {
-  const { frontCorners, backCorners } = detectBottomAadhaarCards(img);
-  cpState.front.corners = frontCorners;
-  cpState.back.corners = backCorners;
-
-  cpState.front.canvas = await warpPerspectiveAsync(img, frontCorners, CP_CARD_W_300, CP_CARD_H_300);
-  cpState.back.canvas = await warpPerspectiveAsync(img, backCorners, CP_CARD_W_300, CP_CARD_H_300);
-
-  updateCardPrintSlotUI('front');
-  updateCardPrintSlotUI('back');
+async function extractBottomJointCard(img) {
+  const corners = detectBottomJointCorners(img);
+  cpState.corners = corners;
+  const targetW = cpState.cardMode === 'single' ? 1011 : 2022;
+  cpState.cardCanvas = await warpPerspectiveAsync(img, corners, targetW, 638);
+  updateCardPrintSlotUI();
   renderCardPrintA4();
-  showToast('Bottom Aadhaar cards extracted (8.56×5.4 cm)');
+  showToast('Bottom joint card extracted at 300 DPI!');
 }
 
-async function reAutoDetectBottomCards() {
+async function reAutoDetectBottomCard() {
   if (!cpState.pageImg) { alert('Please upload an e-Aadhaar PDF or image first.'); return; }
-  setProgress(true, 'Re-detecting bottom cards...', 60);
-  await extractBottomCardsFromPageImg(cpState.pageImg);
+  setProgress(true, 'Re-detecting bottom card...', 60);
+  await extractBottomJointCard(cpState.pageImg);
   setProgress(false);
 }
 
-function updateCardPrintSlotUI(side) {
-  const preview = document.getElementById(side === 'front' ? 'cpFrontPreview' : 'cpBackPreview');
-  const status = document.getElementById(side === 'front' ? 'cpFrontStatus' : 'cpBackStatus');
-  const c = cpState[side].canvas;
+function updateCardPrintSlotUI() {
+  const preview = document.getElementById('cpCardPreview');
+  const status = document.getElementById('cpCardStatus');
+  const c = cpState.cardCanvas;
 
   if (c) {
-    preview.innerHTML = `<img src="${c.toDataURL('image/jpeg', 0.78)}" alt="${side}" />`;
-    status.innerText = '8.56×5.4 cm';
+    preview.innerHTML = `<img src="${c.toDataURL('image/jpeg', 0.8)}" alt="Joint Card" />`;
+    status.innerText = cpState.cardMode === 'single' ? '8.56×5.4 cm' : '17.12×5.4 cm (Joint)';
     status.style.color = '#34d399';
   } else {
-    preview.innerHTML = 'No Card';
+    preview.innerHTML = 'No Card Loaded';
     status.innerText = 'Empty';
     status.style.color = '#94a3b8';
   }
 }
 
-function openCardPrintCrop(side) {
+function openCardPrintCrop() {
   if (!cpState.pageImg) {
     cpInput.click();
     return;
   }
-  openCropModal({ mode: 'cardprint', side }, cpState.pageImg, false, cpState[side].corners);
+  openCropModal(
+    { mode: 'cardprint', cardMode: cpState.cardMode },
+    cpState.pageImg,
+    false,
+    cpState.corners
+  );
 }
 
-window.onCardPrintCropDone = async function (side, warped, savedCorners) {
-  if (cpState[side].canvas) { cpState[side].canvas.width = 0; cpState[side].canvas.height = 0; }
-  cpState[side].corners = savedCorners;
-  cpState[side].canvas = warped;
-  updateCardPrintSlotUI(side);
+window.onCardPrintCropDone = async function (warped, savedCorners) {
+  if (cpState.cardCanvas) { cpState.cardCanvas.width = 0; cpState.cardCanvas.height = 0; }
+  cpState.corners = savedCorners;
+  cpState.cardCanvas = warped;
+  updateCardPrintSlotUI();
   renderCardPrintA4();
 };
 
-function rotateCardPrint(side) {
-  const src = cpState[side].canvas;
+function rotateCardPrint() {
+  const src = cpState.cardCanvas;
   if (!src) return;
   const off = document.createElement('canvas');
   off.width = src.height; off.height = src.width;
@@ -381,39 +353,31 @@ function rotateCardPrint(side) {
   octx.rotate(Math.PI / 2);
   octx.drawImage(src, -src.width / 2, -src.height / 2);
   src.width = 0; src.height = 0;
-  cpState[side].canvas = off;
-  updateCardPrintSlotUI(side);
-  renderCardPrintA4();
-}
-
-function swapCardPrintSides() {
-  if (!cpState.front.canvas && !cpState.back.canvas) return;
-  [cpState.front, cpState.back] = [cpState.back, cpState.front];
-  updateCardPrintSlotUI('front');
-  updateCardPrintSlotUI('back');
+  cpState.cardCanvas = off;
+  updateCardPrintSlotUI();
   renderCardPrintA4();
 }
 
 function clearCardPrint() {
-  if (cpState.front.canvas) { cpState.front.canvas.width = 0; cpState.front.canvas.height = 0; }
-  if (cpState.back.canvas) { cpState.back.canvas.width = 0; cpState.back.canvas.height = 0; }
+  if (cpState.cardCanvas) { cpState.cardCanvas.width = 0; cpState.cardCanvas.height = 0; }
   cpState.pdfBuffer = null;
   cpState.pdfDoc = null;
   cpState.pageImg = null;
-  cpState.front = { canvas: null, corners: null };
-  cpState.back = { canvas: null, corners: null };
+  cpState.cardCanvas = null;
+  cpState.corners = null;
 
   document.getElementById('cpFileMeta').classList.remove('show');
   document.getElementById('cpClearBtn').style.display = 'none';
-  updateCardPrintSlotUI('front');
-  updateCardPrintSlotUI('back');
+  updateCardPrintSlotUI();
   renderCardPrintA4();
 }
 
-function setCpLayout(mode, btn) {
-  cpState.layout = mode;
-  document.querySelectorAll('[data-cplayout]').forEach(b => b.classList.remove('active'));
+function setCpCardMode(mode, btn) {
+  cpState.cardMode = mode;
+  document.querySelectorAll('[data-cpmode]').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
+  updateCardPrintSlotUI();
+  updateCpPreviewMeta();
   renderCardPrintA4();
 }
 
@@ -437,15 +401,20 @@ function onCpBorderSlide() {
   renderCardPrintA4();
 }
 
+function updateCpPreviewMeta() {
+  const leftMm = document.getElementById('cpLeftMarginSlider').value;
+  const sizeLabel = cpState.cardMode === 'single'
+    ? '8.56 × 5.40 cm (Single)'
+    : '17.12 × 5.40 cm (8.56×5.4 cm/side)';
+  document.getElementById('cpPreviewMeta').innerText = `${sizeLabel} • 300 DPI • Left: ${leftMm}mm`;
+}
+
 function onCpMarginSlide() {
   const leftMm = document.getElementById('cpLeftMarginSlider').value;
   const topMm = document.getElementById('cpTopMarginSlider').value;
-  const gapMm = document.getElementById('cpGapSlider').value;
   document.getElementById('cpLeftMarginVal').innerText = leftMm + 'mm';
   document.getElementById('cpTopMarginVal').innerText = topMm + 'mm';
-  document.getElementById('cpGapVal').innerText = gapMm + 'mm';
-  document.getElementById('cpPreviewMeta').innerText =
-    `8.56 × 5.40 cm • 300 DPI • Left Offset: ${leftMm}mm`;
+  updateCpPreviewMeta();
   renderCardPrintA4();
 }
 
@@ -457,55 +426,51 @@ function drawCardPrintA4ToCanvas(canvas, isExport300Dpi = false) {
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
 
-  const cardW = CP_CARD_W_MM * pxPerMm;
+  const cardW = (cpState.cardMode === 'single' ? CP_SINGLE_W_MM : CP_JOINT_W_MM) * pxPerMm;
   const cardH = CP_CARD_H_MM * pxPerMm;
 
   const leftMm = Number(document.getElementById('cpLeftMarginSlider').value);
   const topMm = Number(document.getElementById('cpTopMarginSlider').value);
-  const gapMm = Number(document.getElementById('cpGapSlider').value);
 
-  const showFront = document.getElementById('cpShowFrontCheck').checked;
-  const showBack = document.getElementById('cpShowBackCheck').checked;
   const showBorder = document.getElementById('cpBorderCheck').checked;
   const strokePxBase = Number(document.getElementById('cpBorderWidthSlider').value);
-  const scaleTo300 = W / 2480;
-  const strokeW = Math.max(1, strokePxBase * scaleTo300);
+  const strokeW = Math.max(1, strokePxBase * (W / 2480));
 
-  const startX = leftMm * pxPerMm;
-  const startY = topMm * pxPerMm;
-  const gapPx = gapMm * pxPerMm;
+  const x = leftMm * pxPerMm;
+  const y = topMm * pxPerMm;
 
-  const items = [];
-  if (showFront) items.push({ c: cpState.front.canvas, label: 'FRONT (8.56×5.4cm)' });
-  if (showBack) items.push({ c: cpState.back.canvas, label: 'BACK (8.56×5.4cm)' });
-
-  items.forEach((item, idx) => {
-    const x = cpState.layout === 'row' ? startX + idx * (cardW + gapPx) : startX;
-    const y = cpState.layout === 'row' ? startY : startY + idx * (cardH + gapPx);
-
-    if (item.c) {
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(item.c, x, y, cardW, cardH);
-      if (showBorder) {
-        ctx.strokeStyle = cpState.borderColor;
-        ctx.lineWidth = strokeW;
-        ctx.strokeRect(x, y, cardW, cardH);
-      }
-    } else if (!isExport300Dpi) {
-      ctx.save();
-      ctx.strokeStyle = '#94a3b8';
-      ctx.setLineDash([6, 5]);
-      ctx.lineWidth = 1.5;
+  if (cpState.cardCanvas) {
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(cpState.cardCanvas, x, y, cardW, cardH);
+    if (showBorder) {
+      ctx.strokeStyle = cpState.borderColor;
+      ctx.lineWidth = strokeW;
       ctx.strokeRect(x, y, cardW, cardH);
-      ctx.fillStyle = '#64748b';
-      ctx.font = `bold ${Math.round(3.6 * pxPerMm)}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(item.label, x + cardW / 2, y + cardH / 2);
-      ctx.restore();
     }
-  });
+  } else if (!isExport300Dpi) {
+    ctx.save();
+    ctx.strokeStyle = '#94a3b8';
+    ctx.setLineDash([7, 5]);
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(x, y, cardW, cardH);
+    if (cpState.cardMode === 'joint') {
+      ctx.beginPath();
+      ctx.moveTo(x + cardW / 2, y);
+      ctx.lineTo(x + cardW / 2, y + cardH);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#64748b';
+    ctx.font = `bold ${Math.round(3.8 * pxPerMm)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(
+      cpState.cardMode === 'single' ? 'CARD (8.56 × 5.40 cm)' : 'JOINT FRONT + BACK (17.12 × 5.40 cm)',
+      x + cardW / 2,
+      y + cardH / 2
+    );
+    ctx.restore();
+  }
 }
 
 function renderCardPrintA4() {
@@ -521,7 +486,7 @@ function createCardPrint300DpiCanvas() {
 }
 
 function checkCardPrintReady() {
-  if (!cpState.front.canvas && !cpState.back.canvas) {
+  if (!cpState.cardCanvas) {
     alert('Please upload an e-Aadhaar PDF or image first.');
     return false;
   }
@@ -542,21 +507,20 @@ function downloadCardPrintJPG() {
   const dataUrl = hi.toDataURL('image/jpeg', 0.96);
   hi.width = 0; hi.height = 0;
 
-  // Inject 300 DPI JFIF metadata
   const bin = atob(dataUrl.split(',')[1]);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF && bytes[3] === 0xE0 &&
       bytes[6] === 0x4A && bytes[7] === 0x46 && bytes[8] === 0x49 && bytes[9] === 0x46) {
     bytes[13] = 1;
-    bytes[14] = 0x01; bytes[15] = 0x2C; // 300 X
-    bytes[16] = 0x01; bytes[17] = 0x2C; // 300 Y
+    bytes[14] = 0x01; bytes[15] = 0x2C;
+    bytes[16] = 0x01; bytes[17] = 0x2C;
   }
 
   const url = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }));
   const link = document.createElement('a');
   link.href = url;
-  link.download = `Aadhaar-Card-Print-300DPI-${Date.now()}.jpg`;
+  link.download = `Aadhaar-JointCard-300DPI-${Date.now()}.jpg`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
@@ -571,7 +535,7 @@ async function downloadCardPrintPDF() {
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     pdf.addImage(hi.toDataURL('image/jpeg', 0.96), 'JPEG', 0, 0, 210, 297);
     hi.width = 0; hi.height = 0;
-    pdf.save(`Aadhaar-Card-Print-300DPI-${Date.now()}.pdf`);
+    pdf.save(`Aadhaar-JointCard-300DPI-${Date.now()}.pdf`);
   } catch {
     setProgress(false);
     alert('Could not load PDF engine.');

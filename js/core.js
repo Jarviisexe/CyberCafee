@@ -1,7 +1,7 @@
 const MAX_PAGES = 50;
 
 const state = {
-  activeTab: 'aadhaarTab',
+  activeTab: 'homeTab',
   front: { rawImg: null, warpedCanvas: null, cleanCanvas: null, corners: null },
   back:  { rawImg: null, warpedCanvas: null, cleanCanvas: null, corners: null },
   nextTarget: 'front',
@@ -26,7 +26,10 @@ function loadScriptOnce(url, isModule = false) {
     if (isModule) s.type = 'module';
     s.async = true;
     s.onload = () => resolve();
-    s.onerror = () => { delete _scriptCache[url]; reject(new Error('Failed: ' + url)); };
+    s.onerror = () => {
+      delete _scriptCache[url];
+      reject(new Error('Failed to load: ' + url));
+    };
     document.head.appendChild(s);
   });
   return _scriptCache[url];
@@ -61,22 +64,41 @@ async function ensurePdfJs() {
 }
 
 const TAB_MODULES = {
-  passportTab: { url: 'js/passport.js', module: true },
-  multiTab:    { url: 'js/multipage.js', module: false },
-  resizeTab:   { url: 'js/resize.js', module: false }
+  cardPrintTab: { url: 'js/cardprint.js', module: false, title: 'Card Print (e-Aadhaar PDF)' },
+  aadhaarTab:   { url: null, module: false, title: 'Aadhaar (A4) Scanner' },
+  passportTab:  { url: 'js/passport.js', module: true, title: 'Passport Photo Studio' },
+  multiTab:     { url: 'js/multipage.js', module: false, title: 'Multi-Page A4 Builder' },
+  resizeTab:    { url: 'js/resize.js', module: false, title: 'PDF / JPG Resize' },
+  ageTab:       { url: 'js/age.js', module: false, title: 'Age Calculator' }
 };
 
 async function switchTab(tabId, btn) {
   state.activeTab = tabId;
   document.querySelectorAll('.tab-view').forEach(v => v.classList.remove('active'));
   document.getElementById(tabId).classList.add('active');
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
+
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tabId);
+  });
+
+  const breadcrumb = document.getElementById('toolBreadcrumb');
+  const titleEl = document.getElementById('activeToolTitle');
+  if (tabId === 'homeTab') {
+    breadcrumb.style.display = 'none';
+  } else {
+    breadcrumb.style.display = 'flex';
+    titleEl.innerText = TAB_MODULES[tabId]?.title || 'Tool';
+  }
 
   const mod = TAB_MODULES[tabId];
-  if (mod) {
-    await loadScriptOnce(mod.url, mod.module);
-    if (tabId === 'multiTab' && window.renderMultiGrid) window.renderMultiGrid();
+  if (mod && mod.url) {
+    try {
+      await loadScriptOnce(mod.url, mod.module);
+      if (tabId === 'multiTab' && window.renderMultiGrid) window.renderMultiGrid();
+    } catch (err) {
+      console.error(err);
+      showToast('Module load error! Check js/ folder on GitHub.');
+    }
   }
 }
 
@@ -123,15 +145,17 @@ async function detectCardCornersAsync(img) {
   return corners ? { corners: corners.map(pt => ({ x: pt.x / scale, y: pt.y / scale })) } : null;
 }
 
-async function warpPerspectiveAsync(img, corners) {
+async function warpPerspectiveAsync(img, corners, targetW = null, targetH = null) {
   const [tl, tr, br, bl] = corners;
   const avgW = (Math.hypot(tr.x - tl.x, tr.y - tl.y) + Math.hypot(br.x - bl.x, br.y - bl.y)) / 2;
   const avgH = (Math.hypot(bl.x - tl.x, bl.y - tl.y) + Math.hypot(br.x - tr.x, br.y - tr.y)) / 2;
   const ratio = avgW / Math.max(1, avgH);
 
-  let dstW, dstH;
-  if (ratio >= 1) { dstW = 1100; dstH = Math.max(120, Math.round(1100 / ratio)); }
-  else { dstH = 1100; dstW = Math.max(120, Math.round(1100 * ratio)); }
+  let dstW = targetW, dstH = targetH;
+  if (!dstW || !dstH) {
+    if (ratio >= 1) { dstW = 1100; dstH = Math.max(120, Math.round(1100 / ratio)); }
+    else { dstH = 1100; dstW = Math.max(120, Math.round(1100 * ratio)); }
+  }
 
   const srcCanvas = document.createElement('canvas');
   srcCanvas.width = img.width; srcCanvas.height = img.height;
@@ -179,7 +203,7 @@ function showToast(msg) {
   t.innerText = msg;
   t.style.display = 'block';
   clearTimeout(t._timer);
-  t._timer = setTimeout(() => { t.style.display = 'none'; }, 2200);
+  t._timer = setTimeout(() => { t.style.display = 'none'; }, 2400);
 }
 
 function setProgress(open, text = '', pct = 0) {
@@ -311,6 +335,7 @@ window.addEventListener('paste', (e) => {
   }
   if (!files.length) return;
   if (state.activeTab === 'aadhaarTab' && window.handleAadhaarFiles) window.handleAadhaarFiles(files);
+  else if (state.activeTab === 'cardPrintTab' && window.handleCardPrintUpload) window.handleCardPrintUpload(files[0]);
   else if (state.activeTab === 'passportTab' && window.handlePassportPaste) window.handlePassportPaste(files[0]);
   else if (state.activeTab === 'multiTab' && window.handleMultiFiles) window.handleMultiFiles(files);
   else if (state.activeTab === 'resizeTab' && window.handleResizeUpload) window.handleResizeUpload(files[0]);
@@ -348,17 +373,24 @@ function getDefaultCorners(img, padRatio = 0.03) {
   ];
 }
 
-async function openCropModal(target, img, runAuto) {
+async function openCropModal(target, img, runAuto, presetCorners = null) {
   state.cropTarget = target;
   state.cropImg = img;
-  document.getElementById('cropModalTitle').innerText =
-    target.mode === 'aadhaar' ? `Crop ${target.side.toUpperCase()}` : `Crop Page ${target.index + 1}`;
+
+  let title = 'Adjust Crop';
+  if (target.mode === 'aadhaar') title = `Crop ${target.side.toUpperCase()}`;
+  else if (target.mode === 'cardprint') title = 'Crop Bottom Joint Aadhaar Card';
+  else title = `Crop Page ${target.index + 1}`;
+  document.getElementById('cropModalTitle').innerText = title;
+
   cropCanvas.width = img.width;
   cropCanvas.height = img.height;
 
-  const savedCorners = target.mode === 'aadhaar'
-    ? state[target.side].corners
-    : state.docs[target.index].corners;
+  const savedCorners = presetCorners || (
+    target.mode === 'aadhaar'
+      ? state[target.side].corners
+      : (target.mode === 'multi' ? state.docs[target.index].corners : null)
+  );
 
   if (!runAuto && savedCorners) {
     state.corners = savedCorners.map(p => ({ ...p }));
@@ -398,7 +430,7 @@ function rotateCropImage(deg) {
     const rot = await blobToImage(blob);
     state.cropImg = rot;
     if (state.cropTarget.mode === 'aadhaar') state[state.cropTarget.side].rawImg = rot;
-    else state.docs[state.cropTarget.index].rawBlob = blob;
+    else if (state.cropTarget.mode === 'multi') state.docs[state.cropTarget.index].rawBlob = blob;
     cropCanvas.width = rot.width;
     cropCanvas.height = rot.height;
     await runAutoDetect();
@@ -422,7 +454,7 @@ function drawCropCanvas() {
   cropCtx.drawImage(img, 0, 0);
 
   cropCtx.save();
-  cropCtx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+  cropCtx.fillStyle = 'rgba(0, 0, 0, 0.48)';
   cropCtx.beginPath();
   cropCtx.rect(0, 0, w, h);
   cropCtx.moveTo(state.corners[0].x, state.corners[0].y);
@@ -438,7 +470,7 @@ function drawCropCanvas() {
   const lineW = Math.max(2, 3 * scaleFactor);
   const radius = Math.max(10, 13 * scaleFactor);
 
-  cropCtx.strokeStyle = '#10b981';
+  cropCtx.strokeStyle = '#38bdf8';
   cropCtx.lineWidth = lineW;
   cropCtx.beginPath();
   cropCtx.moveTo(state.corners[0].x, state.corners[0].y);
@@ -459,7 +491,7 @@ function drawCropCanvas() {
   state.corners.forEach((pt, idx) => {
     cropCtx.beginPath();
     cropCtx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
-    cropCtx.fillStyle = state.dragHandle === idx ? '#facc15' : '#2563eb';
+    cropCtx.fillStyle = state.dragHandle === idx ? '#facc15' : '#8b5cf6';
     cropCtx.fill();
     cropCtx.lineWidth = lineW;
     cropCtx.strokeStyle = '#ffffff';
@@ -517,7 +549,14 @@ cropCanvas.addEventListener('pointermove', (e) => {
 cropCanvas.addEventListener('pointerup', () => { state.dragHandle = -1; drawCropCanvas(); });
 
 async function applyCrop() {
-  const warped = await warpPerspectiveAsync(state.cropImg, state.corners);
+  let targetW = null, targetH = null;
+  if (state.cropTarget.mode === 'cardprint') {
+    const isSingle = state.cropTarget.cardMode === 'single';
+    targetW = isSingle ? 1011 : 2022;
+    targetH = 638;
+  }
+
+  const warped = await warpPerspectiveAsync(state.cropImg, state.corners, targetW, targetH);
   const savedCorners = state.corners.map(p => ({ ...p }));
 
   if (state.cropTarget.mode === 'aadhaar') {
@@ -526,6 +565,8 @@ async function applyCrop() {
     state[side].warpedCanvas = warped;
     if (window.processAadhaarSide) await window.processAadhaarSide(side);
     if (window.renderA4) window.renderA4();
+  } else if (state.cropTarget.mode === 'cardprint' && window.onCardPrintCropDone) {
+    await window.onCardPrintCropDone(warped, savedCorners);
   } else if (window.onMultiCropDone) {
     await window.onMultiCropDone(state.cropTarget.index, warped, savedCorners);
   }
