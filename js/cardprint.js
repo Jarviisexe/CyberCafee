@@ -19,7 +19,6 @@ function createEmptyCpSlot(index) {
     yMm: 14 + index * 64,
     wMm: CP_JOINT_W_MM,
     hMm: CP_CARD_H_MM,
-    // Inside-box pan & zoom adjustments
     innerScale: 1.0,
     innerXMm: 0,
     innerYMm: 0
@@ -32,8 +31,8 @@ const cpState = {
   slots: [createEmptyCpSlot(0), createEmptyCpSlot(1), createEmptyCpSlot(2)],
   borderColor: '#000000',
   pendingPdfResolve: null,
-  interactMode: 'none', // 'none' (clean default) | 'inside' (set card inside box) | 'box' (manual box move/resize)
-  dragMode: null,       // 'inside' | 'move' | 0..7
+  interactMode: 'box', // 'box' (default: mouse slide + 4 corner/border resize) | 'inside' | 'none'
+  dragMode: null,
   dragStartMm: { x: 0, y: 0 },
   dragOrigRect: null
 };
@@ -56,7 +55,7 @@ cpZone.addEventListener('drop', (e) => {
   if (e.dataTransfer.files?.[0]) handleCardPrintUpload(e.dataTransfer.files[0]);
 });
 
-// ---------------- INTERACT MODE TOGGLES (BELOW A4 PREVIEW) ----------------
+// ---------------- INTERACT MODE TOGGLES ----------------
 function toggleCpInteractMode(mode) {
   cpState.interactMode = cpState.interactMode === mode ? 'none' : mode;
   cpState.dragMode = null;
@@ -72,9 +71,9 @@ function toggleCpInteractMode(mode) {
     meta.innerText = 'Drag inside box to slide card • Scroll or use slider to zoom inside box';
     syncInsideZoomUI();
   } else if (cpState.interactMode === 'box') {
-    meta.innerText = 'Drag box to move on A4 • Drag 8 handles to match any 4-border size';
+    meta.innerText = 'Drag card to slide on A4 • Drag corners or borders to resize';
   } else {
-    meta.innerText = 'Clean Preview • Click buttons below to adjust card or box';
+    meta.innerText = 'Clean Preview (Handles hidden) • Ready to Print';
   }
 
   renderCardPrintA4();
@@ -377,7 +376,7 @@ async function loadCardPrintPdfPage(pageNum) {
 
   await page.render({ canvasContext: ctx, viewport: vp }).promise;
 
-  setProgress(true, 'Auto-detecting bottom joint card...', 80);
+  setProgress(true, 'Auto-detecting bottom scissor card...', 80);
   const blob = await canvasToBlob(pageCanvas, 'image/png');
   pageCanvas.width = 0; pageCanvas.height = 0;
   const img = await blobToImage(blob);
@@ -387,7 +386,18 @@ async function loadCardPrintPdfPage(pageNum) {
   setProgress(false);
 }
 
-function detectBottomJointCorners(img, cardMode) {
+// Precision UIDAI e-Aadhaar Bottom Scissor-Cut Auto Detector (Matches real UIDAI PDF layout)
+function detectBottomJointCorners(img) {
+  // If user uploaded an already-cropped wide card image directly, keep full frame
+  if (img.width / img.height > 1.75) {
+    return [
+      { x: 0, y: 0 },
+      { x: img.width, y: 0 },
+      { x: img.width, y: img.height },
+      { x: 0, y: img.height }
+    ];
+  }
+
   const maxW = 600;
   const scale = Math.min(1, maxW / img.width);
   const w = Math.round(img.width * scale);
@@ -400,85 +410,132 @@ function detectBottomJointCorners(img, cardMode) {
   const data = ctx.getImageData(0, 0, w, h).data;
   c.width = 0; c.height = 0;
 
-  const yScanStart = Math.floor(h * 0.50);
-  const yScanEnd = Math.floor(h * 0.72);
-  const rowInk = new Float32Array(h);
+  const isInk = (x, y) => {
+    const i = (y * w + x) * 4;
+    return data[i] < 238 || data[i + 1] < 238 || data[i + 2] < 238;
+  };
 
-  for (let y = Math.floor(h * 0.45); y < h; y++) {
-    let ink = 0;
-    for (let x = Math.floor(w * 0.04); x < Math.floor(w * 0.96); x++) {
-      const i = (y * w + x) * 4;
-      if (data[i] < 240 || data[i + 1] < 240 || data[i + 2] < 240) ink++;
-    }
-    rowInk[y] = ink / (w * 0.92);
+  // 1. Find exact outer Left & Right borders in the lower card zone (y: 74% to 91%)
+  const yB0 = Math.floor(h * 0.74);
+  const yB1 = Math.floor(h * 0.91);
+  const yBH = Math.max(1, yB1 - yB0);
+
+  let leftX = Math.floor(w * 0.056);
+  for (let x = Math.floor(w * 0.01); x < Math.floor(w * 0.16); x++) {
+    let hits = 0;
+    for (let y = yB0; y < yB1; y++) if (isInk(x, y)) hits++;
+    if (hits > yBH * 0.35) { leftX = x; break; }
   }
 
-  let splitY = Math.floor(h * 0.61);
-  let bestBlankRun = 0, curRun = 0, runEnd = splitY;
-  for (let y = yScanStart; y <= yScanEnd; y++) {
-    if (rowInk[y] < 0.015) {
-      curRun++;
-      if (curRun >= bestBlankRun) { bestBlankRun = curRun; runEnd = y; }
-    } else {
-      curRun = 0;
-    }
-  }
-  if (bestBlankRun >= 4) splitY = runEnd;
-
-  const x0 = Math.floor(w * 0.02);
-  const x1 = Math.floor(w * 0.98);
-  const y1 = Math.floor(h * 0.975);
-  const rw = x1 - x0;
-
-  let top = -1, bottom = -1, left = -1, right = -1;
-  for (let y = splitY; y < y1; y++) {
-    let count = 0;
-    for (let x = x0; x < x1; x++) {
-      const i = (y * w + x) * 4;
-      if (data[i] < 242 || data[i + 1] < 242 || data[i + 2] < 242) count++;
-    }
-    if (count > rw * 0.02) {
-      if (top === -1) top = y;
-      bottom = y;
-    }
+  let rightX = Math.floor(w * 0.944);
+  for (let x = Math.floor(w * 0.99); x > Math.floor(w * 0.84); x--) {
+    let hits = 0;
+    for (let y = yB0; y < yB1; y++) if (isInk(x, y)) hits++;
+    if (hits > yBH * 0.35) { rightX = x; break; }
   }
 
-  if (top !== -1 && (bottom - top) >= h * 0.14) {
-    for (let x = x0; x < x1; x++) {
-      let count = 0;
-      for (let y = top; y <= bottom; y++) {
-        const i = (y * w + x) * 4;
-        if (data[i] < 242 || data[i + 1] < 242 || data[i + 2] < 242) count++;
+  // 2. Find exact Bottom border (scan upwards from 98% to 84% inside Left..Right)
+  const xIn0 = leftX + Math.floor(w * 0.04);
+  const xIn1 = rightX - Math.floor(w * 0.04);
+  const xMidL = Math.floor(w * 0.47);
+  const xMidR = Math.floor(w * 0.53);
+
+  let bottomY = Math.floor(h * 0.94);
+  for (let y = Math.floor(h * 0.985); y > Math.floor(h * 0.84); y--) {
+    let hits = 0, total = 0;
+    for (let x = xIn0; x < xIn1; x++) {
+      if (x >= xMidL && x <= xMidR) continue;
+      total++;
+      if (isInk(x, y)) hits++;
+    }
+    if (hits > total * 0.15) { bottomY = y; break; }
+  }
+
+  // 3. Find Horizontal Scissor Cut Line between 60% and 78% height
+  // Inspect BOTH halves (excluding outer borders and center divider line)
+  const ySc0 = Math.floor(h * 0.60);
+  const ySc1 = Math.floor(h * 0.78);
+  const rowStats = [];
+
+  for (let y = ySc0; y <= ySc1; y++) {
+    let hits = 0, total = 0, transitions = 0, prevInk = false;
+    for (let x = xIn0; x < xIn1; x++) {
+      if (x >= xMidL && x <= xMidR) { prevInk = false; continue; }
+      const ink = isInk(x, y);
+      total++;
+      if (ink) hits++;
+      if (ink !== prevInk) transitions++;
+      prevInk = ink;
+    }
+    rowStats.push({ y, inkRatio: hits / Math.max(1, total), transitions });
+  }
+
+  // Locate the dashed scissor row (high dash transitions + white gap right above it)
+  let topY = -1;
+  let bestScore = -1;
+
+  for (let idx = 4; idx < rowStats.length - 4; idx++) {
+    const r = rowStats[idx];
+    // Look for dashed line: 14+ transitions horizontally, 5%..75% ink
+    if (r.transitions >= 14 && r.inkRatio >= 0.05 && r.inkRatio <= 0.75) {
+      // Check clean white gap right above (idx-6 .. idx-2)
+      let aboveInkSum = 0;
+      const startAbove = Math.max(0, idx - 6);
+      for (let k = startAbove; k <= idx - 2; k++) aboveInkSum += rowStats[k].inkRatio;
+      const avgAbove = aboveInkSum / Math.max(1, idx - 1 - startAbove);
+
+      if (avgAbove < 0.03) {
+        const score = r.transitions + (r.y / h) * 20; // prefer genuine lower cut line
+        if (score > bestScore) {
+          bestScore = score;
+          topY = r.y + 1;
+        }
       }
-      if (count > (bottom - top) * 0.04) {
-        if (left === -1) left = x;
-        right = x;
+    }
+  }
+
+  // Fallback if dashed line was too faint: find lowest clean white band before the bottom card
+  if (topY === -1) {
+    let blankRun = 0;
+    for (let idx = rowStats.length - 1; idx >= 0; idx--) {
+      if (rowStats[idx].inkRatio < 0.015) {
+        blankRun++;
+      } else {
+        if (blankRun >= 3 && rowStats[idx].y < h * 0.75) {
+          topY = rowStats[idx + blankRun].y;
+          break;
+        }
+        blankRun = 0;
       }
     }
   }
 
-  const ratio = (left !== -1 && right > left && bottom > top) ? (right - left) / (bottom - top) : 0;
-  const isValidRatio = cardMode === 'joint' ? (ratio >= 2.2 && ratio <= 4.1) : (ratio >= 1.15 && ratio <= 2.2);
-
-  if (isValidRatio) {
-    const lx = Math.max(0, left - 1) / scale;
-    const ty = Math.max(0, top - 1) / scale;
-    const rx = Math.min(w, right + 2) / scale;
-    const by = Math.min(h, bottom + 2) / scale;
-    return [{ x: lx, y: ty }, { x: rx, y: ty }, { x: rx, y: by }, { x: lx, y: by }];
+  // Final UIDAI standard fallback
+  if (topY === -1 || (bottomY - topY) < h * 0.14 || (bottomY - topY) > h * 0.32) {
+    return [
+      { x: img.width * 0.055, y: img.height * 0.722 },
+      { x: img.width * 0.945, y: img.height * 0.722 },
+      { x: img.width * 0.945, y: img.height * 0.941 },
+      { x: img.width * 0.055, y: img.height * 0.941 }
+    ];
   }
+
+  const lx = Math.max(0, leftX - 1) / scale;
+  const rx = Math.min(w, rightX + 2) / scale;
+  const ty = Math.max(0, topY) / scale;
+  const by = Math.min(h, bottomY + 2) / scale;
 
   return [
-    { x: img.width * 0.048, y: img.height * 0.638 },
-    { x: img.width * 0.952, y: img.height * 0.638 },
-    { x: img.width * 0.952, y: img.height * 0.912 },
-    { x: img.width * 0.048, y: img.height * 0.912 }
+    { x: lx, y: ty },
+    { x: rx, y: ty },
+    { x: rx, y: by },
+    { x: lx, y: by }
   ];
 }
 
 async function extractBottomJointCard(img) {
   const slot = cpState.slots[cpState.activeSlot];
-  const corners = detectBottomJointCorners(img, slot.cardMode);
+  const corners = detectBottomJointCorners(img);
   slot.corners = corners;
   slot.innerScale = 1.0;
   slot.innerXMm = 0;
@@ -490,13 +547,13 @@ async function extractBottomJointCard(img) {
   syncSlotPanelUI();
   syncInsideZoomUI();
   renderCardPrintA4();
-  showToast(`Card ${cpState.activeSlot + 1} extracted at 300 DPI!`);
+  showToast(`Bottom Aadhaar card extracted!`);
 }
 
 async function reAutoDetectBottomCard() {
   const slot = cpState.slots[cpState.activeSlot];
   if (!slot.pageImg) { alert('Please upload an e-Aadhaar PDF or image first.'); return; }
-  setProgress(true, 'Re-detecting bottom card...', 60);
+  setProgress(true, 'Re-detecting bottom scissor card...', 60);
   await extractBottomJointCard(slot.pageImg);
   setProgress(false);
 }
@@ -629,7 +686,7 @@ function onCpGapSlide() {
   renderCardPrintA4();
 }
 
-// ---------------- INTERACTIVE A4 PREVIEW (INSIDE-BOX + MANUAL BOX MODE) ----------------
+// ---------------- INTERACTIVE A4 PREVIEW ----------------
 function getA4HandlePositionsMm(s) {
   return [
     { x: s.xMm, y: s.yMm, cursor: 'nwse-resize' },
@@ -668,7 +725,6 @@ cpA4Canvas.addEventListener('wheel', (e) => {
 cpA4Canvas.addEventListener('pointerdown', (e) => {
   const mm = pointerToA4Mm(e);
 
-  // Mode 1: Clean preview -> only select slot if clicking a card when cardCount > 1
   if (cpState.interactMode === 'none') {
     for (let i = cpState.cardCount - 1; i >= 0; i--) {
       const s = cpState.slots[i];
@@ -680,7 +736,6 @@ cpA4Canvas.addEventListener('pointerdown', (e) => {
     return;
   }
 
-  // Mode 2: Set Card Inside Box
   if (cpState.interactMode === 'inside') {
     for (let i = cpState.cardCount - 1; i >= 0; i--) {
       const s = cpState.slots[i];
@@ -697,7 +752,6 @@ cpA4Canvas.addEventListener('pointerdown', (e) => {
     return;
   }
 
-  // Mode 3: Manual Box Move / 4-Border Resize
   if (cpState.interactMode === 'box') {
     const active = cpState.slots[cpState.activeSlot];
     const handles = getA4HandlePositionsMm(active);
@@ -850,7 +904,6 @@ function drawCardPrintA4ToCanvas(canvas, isExport300Dpi = false) {
     const h = s.hMm * pxPerMm;
 
     if (s.cardCanvas) {
-      // Clip card inside its box so inside-box slide/zoom stays crisp inside borders
       ctx.save();
       ctx.beginPath();
       ctx.rect(x, y, w, h);
@@ -896,7 +949,6 @@ function drawCardPrintA4ToCanvas(canvas, isExport300Dpi = false) {
     }
   }
 
-  // Highlight active box ONLY when interactMode is 'inside' or 'box' (clean by default!)
   if (!isExport300Dpi && cpState.interactMode !== 'none') {
     const act = cpState.slots[cpState.activeSlot];
     const ax = act.xMm * pxPerMm, ay = act.yMm * pxPerMm;
