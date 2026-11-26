@@ -49,7 +49,7 @@
             <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M12 10v9"/><path d="M6 15h3"/></svg>
           </div>
           <h3>Card Print (PDF)</h3>
-          <p>Unlock password e-Aadhaar PDF, auto-crop bottom joint card (1–3 cards on A4) &amp; set card inside box.</p>
+          <p>Unlock password e-Aadhaar PDF, auto-crop bottom scissor card (1–3 cards on A4) &amp; resize borders.</p>
         </div>
 
         <div class="bento-card" onclick="switchTab('aadhaarTab')">
@@ -229,7 +229,7 @@
     </div>
   </section>
 
-  <!-- TAB 2: CARD PRINT (1 to 3 Joint Aadhaar Cards + Inside-Box & Manual Box Toggles) -->
+  <!-- TAB 2: CARD PRINT (1 to 3 Joint Aadhaar Cards + Mouse Slide/Corner Resize Default ON) -->
   <section id="cardPrintTab" class="tab-view">
     <div class="info-strip">
       <div class="info-strip-title">
@@ -257,7 +257,7 @@
           <button class="pill-btn" data-cpcount="3" onclick="setCpCardCount(3, this)">3 Cards</button>
         </div>
 
-        <!-- Slot Selector Tabs (Shown when 2 or 3 cards selected) -->
+        <!-- Slot Selector Tabs -->
         <div id="cpSlotTabsWrap" style="display:none; margin-bottom:10px;">
           <div class="pill-group three" id="cpSlotTabs">
             <button class="pill-btn active" id="cpSlotTab0" onclick="selectCpSlot(0)">Card 1</button>
@@ -276,7 +276,7 @@
             <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 12 15 15"/></svg>
           </div>
           <div class="drop-title" id="cpDropTitle">Upload e-Aadhaar PDF (or Image)</div>
-          <div class="drop-sub">Password PDF supported • Auto-crops bottom joint card</div>
+          <div class="drop-sub">Password PDF supported • Auto-crops bottom scissor card</div>
         </div>
 
         <div class="file-meta-card" id="cpFileMeta">
@@ -298,7 +298,7 @@
           <div class="joint-preview" id="cpCardPreview">No Card Loaded</div>
           <div class="slot-btns">
             <button class="mini-btn" onclick="openCardPrintCrop()">✂️ Zoom Crop</button>
-            <button class="mini-btn" onclick="reAutoDetectBottomCard()">🎯 Auto Bottom</button>
+            <button class="mini-btn" onclick="reAutoDetectBottomCard()">🎯 Auto Scissor</button>
             <button class="mini-btn" onclick="rotateCardPrint()">↻ 90°</button>
           </div>
         </div>
@@ -364,7 +364,7 @@
         <div class="studio-toolbar">
           <div>
             <strong>A4 Sheet Preview</strong>
-            <span class="studio-meta" id="cpPreviewMeta">Clean Preview • Click buttons below to adjust card or box</span>
+            <span class="studio-meta" id="cpPreviewMeta">Drag card to slide on A4 • Drag corners or borders to resize</span>
           </div>
           <span class="studio-badge" id="cpLiveDimBadge">17.12 × 5.40 cm</span>
         </div>
@@ -372,18 +372,17 @@
           <canvas id="cpA4PreviewCanvas" width="840" height="1188"></canvas>
         </div>
 
-        <!-- Bottom Toggle Buttons (Clean by default, click to adjust!) -->
+        <!-- Bottom Toggle Buttons -->
         <div class="cp-bottom-controls">
           <div class="cp-mode-btns">
+            <button class="cp-toggle-btn active" id="cpBtnBox" onclick="toggleCpInteractMode('box')">
+              📐 Move &amp; Corner/Border Control
+            </button>
             <button class="cp-toggle-btn" id="cpBtnInside" onclick="toggleCpInteractMode('inside')">
               🖼️ Set Card Inside Box
             </button>
-            <button class="cp-toggle-btn" id="cpBtnBox" onclick="toggleCpInteractMode('box')">
-              📐 Manual Box Move / Resize
-            </button>
           </div>
 
-          <!-- Inside-Box Zoom Controls (Visible ONLY when Set Card Inside Box is active) -->
           <div class="cp-inside-bar" id="cpInsideZoomBar" style="display:none;">
             <button class="pp-mini-btn" onclick="cpZoomInsideBy(-0.05)">−</button>
             <input type="range" id="cpInsideZoomSlider" min="0.7" max="2.5" step="0.01" value="1" oninput="onCpInsideZoomSlide()" />
@@ -392,12 +391,11 @@
             <button class="mini-btn" style="flex:0; padding:5px 10px;" onclick="resetCpInsideFit()">↺ Reset</button>
           </div>
 
-          <!-- Manual Box Options (Visible ONLY when Manual Box Move / Resize is active) -->
-          <div class="cp-inside-bar" id="cpBoxOptionBar" style="display:none; justify-content:space-between;">
+          <div class="cp-inside-bar" id="cpBoxOptionBar" style="display:flex; justify-content:space-between;">
             <label class="inline-check" style="margin:0;">
-              <input type="checkbox" id="cpLockAspectCheck" /> Lock Card Ratio while dragging corners
+              <input type="checkbox" id="cpLockAspectCheck" /> Lock Card Ratio on corners
             </label>
-            <button class="mini-btn" style="flex:0; padding:5px 10px;" onclick="toggleCpInteractMode('none')">✓ Done</button>
+            <button class="mini-btn" style="flex:0; padding:5px 10px;" onclick="toggleCpInteractMode('none')">👁️ Hide Handles</button>
           </div>
         </div>
       </div>
@@ -892,7 +890,6 @@
 <div id="printSheet"></div>
 
 <script src="js/core.js"></script>
-<script src="js/cardprint.js"></script>
 <script src="js/aadhaar.js"></script>
 </body>
 </html>
