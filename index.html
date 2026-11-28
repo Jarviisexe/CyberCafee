@@ -65,7 +65,7 @@
             <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
           </div>
           <h3>Passport Photo</h3>
-          <p>AI Background Removal with Pure White / Studio Blue BG &amp; 6 to 36 photos on A4 at 300 DPI.</p>
+          <p>AI Background Removal, 1 Person (6/Row) or 2 Persons (3+3/Row) on A4 at 300 DPI.</p>
         </div>
 
         <div class="bento-card" onclick="switchTab('multiTab')">
@@ -229,7 +229,7 @@
     </div>
   </section>
 
-  <!-- TAB 2: CARD PRINT (1 to 3 Joint Aadhaar Cards + Mouse Slide/Corner Resize Default ON) -->
+  <!-- TAB 2: CARD PRINT -->
   <section id="cardPrintTab" class="tab-view">
     <div class="info-strip">
       <div class="info-strip-title">
@@ -257,7 +257,6 @@
           <button class="pill-btn" data-cpcount="3" onclick="setCpCardCount(3, this)">3 Cards</button>
         </div>
 
-        <!-- Slot Selector Tabs -->
         <div id="cpSlotTabsWrap" style="display:none; margin-bottom:10px;">
           <div class="pill-group three" id="cpSlotTabs">
             <button class="pill-btn active" id="cpSlotTab0" onclick="selectCpSlot(0)">Card 1</button>
@@ -372,7 +371,6 @@
           <canvas id="cpA4PreviewCanvas" width="840" height="1188"></canvas>
         </div>
 
-        <!-- Bottom Toggle Buttons -->
         <div class="cp-bottom-controls">
           <div class="cp-mode-btns">
             <button class="cp-toggle-btn active" id="cpBtnBox" onclick="toggleCpInteractMode('box')">
@@ -402,7 +400,7 @@
     </div>
   </section>
 
-  <!-- TAB 3: PASSPORT PHOTO STUDIO -->
+  <!-- TAB 3: PASSPORT PHOTO STUDIO (1 Person 6/Row OR 2 Persons 3+3/Row) -->
   <section id="passportTab" class="tab-view">
     <div class="info-strip">
       <div class="info-strip-title">
@@ -411,19 +409,32 @@
       </div>
       <div class="info-badges">
         <span class="info-chip">1.2" × 1.5" (360×450 px)</span>
-        <span class="info-chip">300 DPI Print Ready</span>
-        <span class="info-chip">IS-Net AI Background Removal</span>
+        <span class="info-chip">1 Person (6/Row) or 2 Persons (3+3/Row)</span>
+        <span class="info-chip">300 DPI • IS-Net AI BG Remove</span>
       </div>
     </div>
 
     <div class="pp-main-grid">
       <aside class="panel">
         <div class="section-header">
-          <span class="step-title"><span class="step-num">01</span> Photo &amp; Templates</span>
+          <span class="step-title"><span class="step-num">01</span> Photo Mode &amp; Upload</span>
+        </div>
+
+        <div class="control-label">Row Mode (6 Columns on A4)</div>
+        <div class="pill-group mb-10" id="ppModeGroup">
+          <button class="pill-btn active" data-ppmode="1">1 Person (6 / Row)</button>
+          <button class="pill-btn" data-ppmode="2">2 Persons (3 + 3 / Row)</button>
+        </div>
+
+        <div id="ppPersonTabsWrap" style="display:none; margin-bottom:10px;">
+          <div class="pill-group">
+            <button class="pill-btn active" id="ppPersonTab0">👤 Person 1 (Left 3)</button>
+            <button class="pill-btn" id="ppPersonTab1">👤 Person 2 (Right 3)</button>
+          </div>
         </div>
 
         <label class="btn-main btn-primary full-width" style="cursor:pointer;">
-          Upload Portrait Photo
+          <span id="ppUploadLabelText">Upload Portrait Photo</span>
           <input type="file" id="ppUpload" accept="image/*" hidden />
         </label>
 
