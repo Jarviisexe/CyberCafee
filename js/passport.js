@@ -1,4 +1,5 @@
 const upload = document.getElementById('ppUpload');
+const uploadLabelText = document.getElementById('ppUploadLabelText');
 const cropStage = document.getElementById('ppCropStage');
 const cropCanvas = document.getElementById('ppCropCanvas');
 const cropCtx = cropCanvas.getContext('2d');
@@ -13,26 +14,44 @@ const loaderText = document.getElementById('ppLoaderText');
 const progressFill = document.getElementById('ppProgressFill');
 const aiStatus = document.getElementById('ppAiStatus');
 
-const workCanvas = document.createElement('canvas');
-let fgCanvas = null;
-const cutCanvas = document.createElement('canvas');
-let activeImg = null;
-let imgLoaded = false;
+function createPersonSlot() {
+  const renderedCanvas = document.createElement('canvas');
+  renderedCanvas.width = 360;
+  renderedCanvas.height = 450;
+  return {
+    workCanvas: document.createElement('canvas'),
+    fgCanvas: null,
+    cutCanvas: document.createElement('canvas'),
+    renderedCanvas,
+    activeImg: null,
+    imgLoaded: false,
+    baseScale: 1,
+    zoom: 1,
+    offsetX: 0,
+    offsetY: 0,
+    bg: '#ffffff',
+    edge: 'natural',
+    filter: 'none',
+    aiDone: false
+  };
+}
 
-let baseScale = 1, zoom = 1;
-let offsetX = 0, offsetY = 0;
+const persons = [createPersonSlot(), createPersonSlot()];
+let personMode = 1; // 1 = 1 Person (6/Row) | 2 = 2 Persons (3+3/Row)
+let activePerson = 0;
 
-let selectedBg = '#ffffff';
-let selectedEdge = 'natural';
 let selectedRows = 1;
 let selectedBorder = 'black3';
-let selectedFilter = 'none';
 
 let isDragging = false, lastX = 0, lastY = 0;
 let prevPinchDist = null, prevMidX = 0, prevMidY = 0;
 let rafScheduled = false;
 
 let removeBackgroundFn = null;
+
+function cur() {
+  return persons[activePerson];
+}
 
 function clearA4Preview() {
   a4PreviewCtx.fillStyle = "#ffffff";
@@ -47,26 +66,110 @@ async function getRemoveBgLib() {
   return removeBackgroundFn;
 }
 
-function buildCutout() {
-  if (!imgLoaded) return;
-  if (selectedBg === 'original' || !fgCanvas) {
-    activeImg = workCanvas;
+// ---------------- 1 PERSON / 2 PERSONS (3+3) MODE ----------------
+function updateLayoutLabels() {
+  const btns = document.querySelectorAll('#ppLayoutTemplates .pill-btn');
+  btns.forEach(btn => {
+    const r = parseInt(btn.dataset.rows, 10);
+    if (personMode === 2) {
+      btn.textContent = `${r * 3}+${r * 3} Photos (${r} ${r === 1 ? 'Row' : 'Rows'})`;
+    } else {
+      btn.textContent = `${r * 6} Photos (${r} ${r === 1 ? 'Row' : 'Rows'})`;
+    }
+  });
+}
+
+function syncPersonUI() {
+  const p = cur();
+
+  // Person switcher tabs
+  for (let i = 0; i < 2; i++) {
+    const tab = document.getElementById('ppPersonTab' + i);
+    if (!tab) continue;
+    tab.classList.toggle('active', i === activePerson);
+    tab.classList.toggle('has-file', persons[i].imgLoaded);
+    const sideLabel = i === 0 ? 'Left 3' : 'Right 3';
+    tab.textContent = persons[i].imgLoaded ? `👤 Person ${i + 1} ✓` : `👤 Person ${i + 1} (${sideLabel})`;
+  }
+
+  uploadLabelText.textContent = personMode === 2
+    ? `Upload Photo (Person ${activePerson + 1})`
+    : 'Upload Portrait Photo';
+
+  // Sync BG / Edge / Filter highlights for active person
+  document.querySelectorAll('#ppBgTemplates .pill-btn').forEach(b => b.classList.toggle('active', b.dataset.bg === p.bg));
+  document.querySelectorAll('#ppEdgeTemplates .pill-btn').forEach(b => b.classList.toggle('active', b.dataset.edge === p.edge));
+  document.querySelectorAll('#ppFilterTemplates .pill-btn').forEach(b => b.classList.toggle('active', b.dataset.filter === p.filter));
+
+  emptyMsg.style.display = p.imgLoaded ? 'none' : 'flex';
+  if (!p.imgLoaded) {
+    cropCtx.clearRect(0, 0, 360, 450);
+    const titleEl = emptyMsg.querySelector('strong');
+    if (titleEl) {
+      titleEl.textContent = personMode === 2
+        ? `Upload Photo for Person ${activePerson + 1}`
+        : 'Upload or Drop Photo Here';
+    }
+    aiStatus.textContent = personMode === 2
+      ? `🤖 Ready for Person ${activePerson + 1} (${activePerson === 0 ? 'Left 3' : 'Right 3'})`
+      : '🤖 HD Background Remove AI Ready';
+    aiStatus.className = 'pp-status-box';
+  } else {
+    aiStatus.textContent = p.aiDone
+      ? `✅ Person ${activePerson + 1}: Background Removed!`
+      : `🖼️ Person ${activePerson + 1}: Photo Loaded`;
+    aiStatus.className = p.aiDone ? 'pp-status-box ok' : 'pp-status-box';
+    drawCropForPerson(activePerson);
+  }
+
+  updateZoomUI();
+}
+
+document.querySelectorAll('#ppModeGroup .pill-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    personMode = parseInt(btn.dataset.ppmode, 10);
+    document.querySelectorAll('#ppModeGroup .pill-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    document.getElementById('ppPersonTabsWrap').style.display = personMode === 2 ? 'block' : 'none';
+    if (personMode === 1) activePerson = 0;
+
+    updateLayoutLabels();
+    syncPersonUI();
+    generateA4Preview();
+  });
+});
+
+document.getElementById('ppPersonTab0').addEventListener('click', () => {
+  activePerson = 0;
+  syncPersonUI();
+});
+document.getElementById('ppPersonTab1').addEventListener('click', () => {
+  activePerson = 1;
+  syncPersonUI();
+});
+
+// ---------------- AI BACKGROUND CUTOUT ----------------
+function buildCutout(p) {
+  if (!p.imgLoaded) return;
+  if (p.bg === 'original' || !p.fgCanvas) {
+    p.activeImg = p.workCanvas;
     return;
   }
 
-  const w = fgCanvas.width, h = fgCanvas.height;
-  cutCanvas.width = w;
-  cutCanvas.height = h;
-  const cctx = cutCanvas.getContext('2d', { willReadFrequently: true });
+  const w = p.fgCanvas.width, h = p.fgCanvas.height;
+  p.cutCanvas.width = w;
+  p.cutCanvas.height = h;
+  const cctx = p.cutCanvas.getContext('2d', { willReadFrequently: true });
 
   cctx.clearRect(0, 0, w, h);
-  cctx.drawImage(fgCanvas, 0, 0);
+  cctx.drawImage(p.fgCanvas, 0, 0);
   const imgData = cctx.getImageData(0, 0, w, h);
   const d = imgData.data;
 
   let minA = 14, maxA = 242;
-  if (selectedEdge === 'tight') { minA = 42; maxA = 210; }
-  else if (selectedEdge === 'soft') { minA = 6; maxA = 250; }
+  if (p.edge === 'tight') { minA = 42; maxA = 210; }
+  else if (p.edge === 'soft') { minA = 6; maxA = 250; }
 
   const invSpan = 255 / (maxA - minA);
   for (let i = 3; i < d.length; i += 4) {
@@ -78,23 +181,24 @@ function buildCutout() {
   cctx.putImageData(imgData, 0, 0);
 
   cctx.globalCompositeOperation = 'destination-over';
-  cctx.fillStyle = selectedBg;
+  cctx.fillStyle = p.bg;
   cctx.fillRect(0, 0, w, h);
   cctx.globalCompositeOperation = 'source-over';
 
-  activeImg = cutCanvas;
+  p.activeImg = p.cutCanvas;
 }
 
-async function runHighPrecisionCutout() {
+async function runHighPrecisionCutout(targetIdx) {
+  const p = persons[targetIdx];
   loaderOverlay.classList.add('show');
   progressFill.style.width = '10%';
   loaderText.textContent = "Loading High-Precision AI...";
-  aiStatus.textContent = "⏳ AI removing background...";
+  aiStatus.textContent = `⏳ AI removing background (Person ${targetIdx + 1})...`;
   aiStatus.className = "pp-status-box";
 
   try {
     const removeBg = await getRemoveBgLib();
-    const inputBlob = await new Promise(res => workCanvas.toBlob(res, 'image/jpeg', 0.94));
+    const inputBlob = await new Promise(res => p.workCanvas.toBlob(res, 'image/jpeg', 0.94));
 
     const config = {
       model: 'isnet_fp16',
@@ -123,17 +227,21 @@ async function runHighPrecisionCutout() {
     const cutUrl = URL.createObjectURL(resultBlob);
     const cutImg = new Image();
     cutImg.onload = () => {
-      fgCanvas = document.createElement('canvas');
-      fgCanvas.width = workCanvas.width;
-      fgCanvas.height = workCanvas.height;
-      fgCanvas.getContext('2d').drawImage(cutImg, 0, 0, fgCanvas.width, fgCanvas.height);
+      p.fgCanvas = document.createElement('canvas');
+      p.fgCanvas.width = p.workCanvas.width;
+      p.fgCanvas.height = p.workCanvas.height;
+      p.fgCanvas.getContext('2d').drawImage(cutImg, 0, 0, p.fgCanvas.width, p.fgCanvas.height);
       URL.revokeObjectURL(cutUrl);
 
-      buildCutout();
-      renderAll();
+      p.aiDone = true;
+      buildCutout(p);
+      drawCropForPerson(targetIdx);
+      generateA4Preview();
       loaderOverlay.classList.remove('show');
-      aiStatus.textContent = "✅ Background Removed! Studio Mode Active";
-      aiStatus.className = "pp-status-box ok";
+      if (targetIdx === activePerson) {
+        aiStatus.textContent = `✅ Person ${targetIdx + 1}: Background Removed!`;
+        aiStatus.className = "pp-status-box ok";
+      }
     };
     cutImg.src = cutUrl;
   } catch (err) {
@@ -146,6 +254,9 @@ async function runHighPrecisionCutout() {
 
 function loadFile(file) {
   if (!file || !file.type.startsWith('image/')) return;
+  const targetIdx = activePerson;
+  const p = persons[targetIdx];
+
   const url = URL.createObjectURL(file);
   const rawImg = new Image();
   rawImg.onload = () => {
@@ -157,16 +268,17 @@ function loadFile(file) {
       w = Math.round(w * r);
       h = Math.round(h * r);
     }
-    workCanvas.width = w;
-    workCanvas.height = h;
-    workCanvas.getContext('2d').drawImage(rawImg, 0, 0, w, h);
+    p.workCanvas.width = w;
+    p.workCanvas.height = h;
+    p.workCanvas.getContext('2d').drawImage(rawImg, 0, 0, w, h);
 
-    fgCanvas = null;
-    activeImg = workCanvas;
-    imgLoaded = true;
-    emptyMsg.style.display = 'none';
+    p.fgCanvas = null;
+    p.aiDone = false;
+    p.activeImg = p.workCanvas;
+    p.imgLoaded = true;
     resetPosition();
-    runHighPrecisionCutout();
+    syncPersonUI();
+    runHighPrecisionCutout(targetIdx);
   };
   rawImg.src = url;
 }
@@ -189,18 +301,20 @@ cropStage.addEventListener('drop', (e) => {
 });
 
 function resetPosition() {
-  if (!imgLoaded || !activeImg) return;
-  baseScale = Math.max(360 / activeImg.width, 450 / activeImg.height);
-  zoom = 1;
-  offsetX = (360 - activeImg.width * baseScale) / 2;
-  offsetY = (450 - activeImg.height * baseScale) / 2;
+  const p = cur();
+  if (!p.imgLoaded || !p.activeImg) return;
+  p.baseScale = Math.max(360 / p.activeImg.width, 450 / p.activeImg.height);
+  p.zoom = 1;
+  p.offsetX = (360 - p.activeImg.width * p.baseScale) / 2;
+  p.offsetY = (450 - p.activeImg.height * p.baseScale) / 2;
   updateZoomUI();
   renderAll();
 }
 
 function updateZoomUI() {
-  zoomSlider.value = zoom.toFixed(2);
-  zoomVal.textContent = Math.round(zoom * 100) + '%';
+  const p = cur();
+  zoomSlider.value = p.zoom.toFixed(2);
+  zoomVal.textContent = Math.round(p.zoom * 100) + '%';
 }
 
 function scheduleRender() {
@@ -213,24 +327,25 @@ function scheduleRender() {
 }
 
 function zoomAtPoint(newZoom, cx, cy) {
-  if (!imgLoaded) return;
+  const p = cur();
+  if (!p.imgLoaded) return;
   newZoom = Math.max(0.4, Math.min(4.0, newZoom));
-  const ratio = newZoom / zoom;
-  offsetX = cx - (cx - offsetX) * ratio;
-  offsetY = cy - (cy - offsetY) * ratio;
-  zoom = newZoom;
+  const ratio = newZoom / p.zoom;
+  p.offsetX = cx - (cx - p.offsetX) * ratio;
+  p.offsetY = cy - (cy - p.offsetY) * ratio;
+  p.zoom = newZoom;
   updateZoomUI();
   scheduleRender();
 }
 
-document.getElementById('ppZoomOutBtn').addEventListener('click', () => zoomAtPoint(zoom - 0.1, 180, 225));
-document.getElementById('ppZoomInBtn').addEventListener('click', () => zoomAtPoint(zoom + 0.1, 180, 225));
+document.getElementById('ppZoomOutBtn').addEventListener('click', () => zoomAtPoint(cur().zoom - 0.1, 180, 225));
+document.getElementById('ppZoomInBtn').addEventListener('click', () => zoomAtPoint(cur().zoom + 0.1, 180, 225));
 document.getElementById('ppResetBtn').addEventListener('click', resetPosition);
 document.getElementById('ppGuideBtn').addEventListener('click', () => faceGuide.classList.toggle('hidden'));
 document.getElementById('ppDownloadBtn').addEventListener('click', downloadA4);
 document.getElementById('ppPrintBtn').addEventListener('click', printA4);
 document.getElementById('ppAddMultiBtn').addEventListener('click', async () => {
-  if (!imgLoaded) return alert("Please upload a photo first!");
+  if (!hasAnyPhotoLoaded()) return alert("Please upload a photo first!");
   const full = createFullA4Canvas();
   await window.addSheetCanvasToMultiPage(full, 'Passport');
   full.width = 0; full.height = 0;
@@ -239,26 +354,27 @@ document.getElementById('ppAddMultiBtn').addEventListener('click', async () => {
 zoomSlider.addEventListener('input', () => zoomAtPoint(parseFloat(zoomSlider.value), 180, 225));
 
 cropStage.addEventListener('wheel', (e) => {
-  if (!imgLoaded) return;
+  if (!cur().imgLoaded) return;
   e.preventDefault();
   const rect = cropCanvas.getBoundingClientRect();
   const cx = (e.clientX - rect.left) * (360 / rect.width);
   const cy = (e.clientY - rect.top) * (450 / rect.height);
-  zoomAtPoint(zoom * (e.deltaY < 0 ? 1.08 : 0.92), cx, cy);
+  zoomAtPoint(cur().zoom * (e.deltaY < 0 ? 1.08 : 0.92), cx, cy);
 }, { passive: false });
 
 cropStage.addEventListener('mousedown', (e) => {
-  if (!imgLoaded || e.button !== 0) return;
+  if (!cur().imgLoaded || e.button !== 0) return;
   isDragging = true;
   lastX = e.clientX;
   lastY = e.clientY;
 });
 window.addEventListener('mousemove', (e) => {
-  if (!isDragging || !imgLoaded) return;
+  const p = cur();
+  if (!isDragging || !p.imgLoaded) return;
   const rect = cropCanvas.getBoundingClientRect();
   const factor = 360 / rect.width;
-  offsetX += (e.clientX - lastX) * factor;
-  offsetY += (e.clientY - lastY) * factor;
+  p.offsetX += (e.clientX - lastX) * factor;
+  p.offsetY += (e.clientY - lastY) * factor;
   lastX = e.clientX;
   lastY = e.clientY;
   scheduleRender();
@@ -266,7 +382,7 @@ window.addEventListener('mousemove', (e) => {
 window.addEventListener('mouseup', () => { isDragging = false; });
 
 cropStage.addEventListener('touchstart', (e) => {
-  if (!imgLoaded) return;
+  if (!cur().imgLoaded) return;
   e.preventDefault();
   if (e.touches.length === 1) {
     isDragging = true;
@@ -283,7 +399,8 @@ cropStage.addEventListener('touchstart', (e) => {
 }, { passive: false });
 
 cropStage.addEventListener('touchmove', (e) => {
-  if (!imgLoaded) return;
+  const p = cur();
+  if (!p.imgLoaded) return;
   e.preventDefault();
   const rect = cropCanvas.getBoundingClientRect();
   const factor = 360 / rect.width;
@@ -291,8 +408,8 @@ cropStage.addEventListener('touchmove', (e) => {
   if (e.touches.length === 1 && isDragging) {
     const tx = e.touches[0].clientX;
     const ty = e.touches[0].clientY;
-    offsetX += (tx - lastX) * factor;
-    offsetY += (ty - lastY) * factor;
+    p.offsetX += (tx - lastX) * factor;
+    p.offsetY += (ty - lastY) * factor;
     lastX = tx;
     lastY = ty;
     scheduleRender();
@@ -302,12 +419,12 @@ cropStage.addEventListener('touchmove', (e) => {
     const curMidX = (t0.clientX + t1.clientX) / 2;
     const curMidY = (t0.clientY + t1.clientY) / 2;
 
-    offsetX += (curMidX - prevMidX) * factor;
-    offsetY += (curMidY - prevMidY) * factor;
+    p.offsetX += (curMidX - prevMidX) * factor;
+    p.offsetY += (curMidY - prevMidY) * factor;
 
     const cx = (curMidX - rect.left) * factor;
     const cy = (curMidY - rect.top) * (450 / rect.height);
-    zoomAtPoint(zoom * (curDist / prevPinchDist), cx, cy);
+    zoomAtPoint(p.zoom * (curDist / prevPinchDist), cx, cy);
 
     prevPinchDist = curDist;
     prevMidX = curMidX;
@@ -327,60 +444,82 @@ cropStage.addEventListener('touchend', (e) => {
   }
 });
 
-function setupTemplateGroup(containerId, attr, callback) {
+function setupTemplateGroup(containerId, attr, callback, redrawAllPersons = false) {
   const buttons = document.querySelectorAll(`#${containerId} .pill-btn`);
   buttons.forEach(btn => {
     btn.addEventListener('click', () => {
       buttons.forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       callback(btn.dataset[attr]);
-      if (imgLoaded) renderAll();
+      if (redrawAllPersons) {
+        if (persons[0].imgLoaded) drawCropForPerson(0);
+        if (persons[1].imgLoaded) drawCropForPerson(1);
+        generateA4Preview();
+      } else if (cur().imgLoaded) {
+        renderAll();
+      } else {
+        generateA4Preview();
+      }
     });
   });
 }
 
-setupTemplateGroup('ppBgTemplates', 'bg', (val) => { selectedBg = val; buildCutout(); });
-setupTemplateGroup('ppEdgeTemplates', 'edge', (val) => { selectedEdge = val; buildCutout(); });
-setupTemplateGroup('ppLayoutTemplates', 'rows', (val) => selectedRows = parseInt(val));
-setupTemplateGroup('ppBorderTemplates', 'border', (val) => selectedBorder = val);
-setupTemplateGroup('ppFilterTemplates', 'filter', (val) => selectedFilter = val);
+setupTemplateGroup('ppBgTemplates', 'bg', (val) => { cur().bg = val; buildCutout(cur()); });
+setupTemplateGroup('ppEdgeTemplates', 'edge', (val) => { cur().edge = val; buildCutout(cur()); });
+setupTemplateGroup('ppLayoutTemplates', 'rows', (val) => { selectedRows = parseInt(val, 10); }, true);
+setupTemplateGroup('ppBorderTemplates', 'border', (val) => { selectedBorder = val; }, true);
+setupTemplateGroup('ppFilterTemplates', 'filter', (val) => { cur().filter = val; });
 
-function drawCrop() {
-  if (!imgLoaded || !activeImg) return;
-  const bgFill = (selectedBg !== 'original') ? selectedBg : "#ffffff";
-  const scale = baseScale * zoom;
+function drawCropForPerson(idx) {
+  const p = persons[idx];
+  if (!p.imgLoaded || !p.activeImg) return;
 
-  cropCtx.fillStyle = bgFill;
-  cropCtx.fillRect(0, 0, 360, 450);
+  const rCtx = p.renderedCanvas.getContext('2d');
+  const bgFill = (p.bg !== 'original') ? p.bg : "#ffffff";
+  const scale = p.baseScale * p.zoom;
 
-  cropCtx.save();
-  cropCtx.imageSmoothingEnabled = true;
-  cropCtx.imageSmoothingQuality = 'high';
-  if (selectedFilter !== 'none') cropCtx.filter = selectedFilter;
-  cropCtx.drawImage(activeImg, offsetX, offsetY, activeImg.width * scale, activeImg.height * scale);
-  cropCtx.restore();
+  rCtx.fillStyle = bgFill;
+  rCtx.fillRect(0, 0, 360, 450);
+
+  rCtx.save();
+  rCtx.imageSmoothingEnabled = true;
+  rCtx.imageSmoothingQuality = 'high';
+  if (p.filter !== 'none') rCtx.filter = p.filter;
+  rCtx.drawImage(p.activeImg, p.offsetX, p.offsetY, p.activeImg.width * scale, p.activeImg.height * scale);
+  rCtx.restore();
 
   if (selectedBorder === 'black3') {
-    cropCtx.strokeStyle = "#000000";
-    cropCtx.lineWidth = 3;
-    cropCtx.strokeRect(1.5, 1.5, 357, 447);
+    rCtx.strokeStyle = "#000000";
+    rCtx.lineWidth = 3;
+    rCtx.strokeRect(1.5, 1.5, 357, 447);
   } else if (selectedBorder === 'black1') {
-    cropCtx.strokeStyle = "#000000";
-    cropCtx.lineWidth = 1.5;
-    cropCtx.strokeRect(0.75, 0.75, 358.5, 448.5);
+    rCtx.strokeStyle = "#000000";
+    rCtx.lineWidth = 1.5;
+    rCtx.strokeRect(0.75, 0.75, 358.5, 448.5);
   } else if (selectedBorder === 'double') {
-    cropCtx.strokeStyle = "#ffffff";
-    cropCtx.lineWidth = 6;
-    cropCtx.strokeRect(3, 3, 354, 444);
-    cropCtx.strokeStyle = "#000000";
-    cropCtx.lineWidth = 2.5;
-    cropCtx.strokeRect(1.25, 1.25, 357.5, 447.5);
+    rCtx.strokeStyle = "#ffffff";
+    rCtx.lineWidth = 6;
+    rCtx.strokeRect(3, 3, 354, 444);
+    rCtx.strokeStyle = "#000000";
+    rCtx.lineWidth = 2.5;
+    rCtx.strokeRect(1.25, 1.25, 357.5, 447.5);
+  }
+
+  if (idx === activePerson) {
+    cropCtx.clearRect(0, 0, 360, 450);
+    cropCtx.drawImage(p.renderedCanvas, 0, 0);
   }
 }
 
+function hasAnyPhotoLoaded() {
+  if (personMode === 1) return persons[0].imgLoaded;
+  return persons[0].imgLoaded || persons[1].imgLoaded;
+}
+
 function generateA4Preview() {
-  if (!imgLoaded) return;
   clearA4Preview();
+  if (!hasAnyPhotoLoaded() && personMode === 1) return;
+
   const s = 0.25;
   const photoW = 360 * s, photoH = 450 * s;
   const gap = 30 * s, marginX = 85 * s, marginY = 85 * s;
@@ -389,13 +528,31 @@ function generateA4Preview() {
     const y = marginY + r * (photoH + gap);
     for (let c = 0; c < 6; c++) {
       const x = marginX + c * (photoW + gap);
-      a4PreviewCtx.drawImage(cropCanvas, x, y, photoW, photoH);
+      const pIdx = (personMode === 2 && c >= 3) ? 1 : 0;
+      const p = persons[pIdx];
+
+      if (p.imgLoaded) {
+        a4PreviewCtx.drawImage(p.renderedCanvas, x, y, photoW, photoH);
+      } else if (personMode === 2) {
+        a4PreviewCtx.save();
+        a4PreviewCtx.strokeStyle = '#cbd5e1';
+        a4PreviewCtx.setLineDash([3, 3]);
+        a4PreviewCtx.strokeRect(x, y, photoW, photoH);
+        a4PreviewCtx.fillStyle = '#94a3b8';
+        a4PreviewCtx.font = 'bold 11px sans-serif';
+        a4PreviewCtx.textAlign = 'center';
+        a4PreviewCtx.textBaseline = 'middle';
+        a4PreviewCtx.fillText(`P${pIdx + 1}`, x + photoW / 2, y + photoH / 2);
+        a4PreviewCtx.restore();
+      }
     }
   }
 }
 
 function createFullA4Canvas() {
-  drawCrop();
+  if (persons[0].imgLoaded) drawCropForPerson(0);
+  if (personMode === 2 && persons[1].imgLoaded) drawCropForPerson(1);
+
   const full = document.createElement('canvas');
   full.width = 2480;
   full.height = 3508;
@@ -409,19 +566,23 @@ function createFullA4Canvas() {
     const y = marginY + r * (photoH + gap);
     for (let c = 0; c < 6; c++) {
       const x = marginX + c * (photoW + gap);
-      ctx.drawImage(cropCanvas, x, y);
+      const pIdx = (personMode === 2 && c >= 3) ? 1 : 0;
+      const p = persons[pIdx];
+      if (p.imgLoaded) {
+        ctx.drawImage(p.renderedCanvas, x, y);
+      }
     }
   }
   return full;
 }
 
 function renderAll() {
-  drawCrop();
+  drawCropForPerson(activePerson);
   generateA4Preview();
 }
 
 function downloadA4() {
-  if (!imgLoaded) return alert("Please upload a photo first!");
+  if (!hasAnyPhotoLoaded()) return alert("Please upload a photo first!");
   const fullA4 = createFullA4Canvas();
   const dataUrl = fullA4.toDataURL("image/jpeg", 0.96);
   fullA4.width = 0; fullA4.height = 0;
@@ -437,18 +598,25 @@ function downloadA4() {
     bytes[16] = 0x01; bytes[17] = 0x2C;
   }
 
+  const label = personMode === 2
+    ? `${selectedRows * 3}+${selectedRows * 3}photos`
+    : `${selectedRows * 6}photos`;
+
   const url = URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
   const link = document.createElement('a');
   link.href = url;
-  link.download = `passport_${selectedRows * 6}photos_A4_300DPI.jpg`;
+  link.download = `passport_${label}_A4_300DPI.jpg`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
 function printA4() {
-  if (!imgLoaded) return alert("Please upload a photo first!");
+  if (!hasAnyPhotoLoaded()) return alert("Please upload a photo first!");
   const fullA4 = createFullA4Canvas();
   const data = fullA4.toDataURL("image/jpeg", 0.96);
   fullA4.width = 0; fullA4.height = 0;
   window.triggerPrint([data]);
 }
+
+updateLayoutLabels();
+syncPersonUI();
